@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Concurrent downloads and archive checks — 19 October 2026
+
+The updated source ran **78 tests per runtime: 77 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip remains the Windows-only DPAPI test.
+
+New tests hold a mock archive check open while later downloads finish, prove that each queued file is checked exactly once, and verify that the operation stays active until the check queue drains. They also cover shared pause/resume, chat switching that awaits both transfer and WinRAR process cleanup, cancellation after a fatal download error, restart recovery of pending checks without downloading again, and WinRAR disappearing before checks start. UI tests verify that background check updates preserve the current download's filename, speed, ETA, and progress.
+
+The updated demo was rendered and visually inspected with one archive downloading and the previous archive being checked. Concurrency tests use simulated transfers and WinRAR results/processes; real Windows WinRAR behavior and live Telegram downloads remain unverified here.
+
+For Windows acceptance, download several archives including one whose test is slow. Confirm that the next transfer advances while the previous file shows Checking, that Pause/Stop affect both operations, and that closing then reopening and pressing Start resumes pending checks. The app should remain in Checking archives after the final download until remaining checks finish.
+
 ## RAR support and archive checking — 19 October 2026
 
 The update was tested on macOS with Python **3.15.0**, **3.14.8**, and **3.12.3**, using the pinned dependencies. **Each runtime ran 71 tests: 70 passed, 1 skipped, with exit code 0.** The skip is the Windows-only DPAPI test.

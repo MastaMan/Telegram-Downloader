@@ -208,6 +208,8 @@ class Window(QMainWindow):
         self.closing = False
         self.can_close = False
         self.last_progress = 0
+        self.checker_path = None
+        self.verification_info = None
         self.setWindowTitle('Telegram Archive Desktop' + (' — Preview' if demo else ''))
         self.resize(1280, 930)
         self.setMinimumSize(1100, 880)
@@ -477,21 +479,36 @@ class Window(QMainWindow):
         self.overall_bar.setValue(round(1000 * summary['received'] / max(1, summary['bytes'])))
         self.total_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
 
+    def update_verification_indicator(self):
+        if self.verification_info:
+            detail = self.verification_info['detail']
+            attempt = detail.split('attempt ', 1)[-1] if 'attempt ' in detail else ''
+            text = 'Checks paused' if self.state == 'paused' else 'Checking archive'
+            self.checker_label.setText(text + (f' · {attempt}' if attempt else '…'))
+            self.checker_label.setToolTip(self.verification_info['name'] + '\n' + detail)
+        else:
+            self.checker_label.setText('Automatic checks on' if self.checker_path else 'WinRAR not configured')
+            self.checker_label.setToolTip(str(self.checker_path) if self.checker_path else 'Downloads remain Unchecked until WinRAR is configured. Install WinRAR and select WinRAR.exe.')
+
     def on_event(self, name, value):
         if name == 'state':
             self.state = value
             titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             self.footer.setText(titles.get(value, value))
-            if value in {'idle', 'paused'}:
+            if value in {'idle', 'paused', 'verifying'}:
                 self.on_event('speed_reset', None)
+            self.update_verification_indicator()
             if value == 'idle' and self.current_job:
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
         elif name == 'checker':
-            self.checker_label.setText('Automatic checks on' if value else 'WinRAR not configured')
-            self.checker_label.setToolTip(str(value) if value else 'Downloads remain Unchecked until WinRAR is configured. Install WinRAR and select WinRAR.exe.')
+            self.checker_path = value
+            self.update_verification_indicator()
+        elif name == 'verification':
+            self.verification_info = value
+            self.update_verification_indicator()
         elif name == 'phase':
             self.file_status.setText('Checking archive…')
             self.footer.setText(value)
@@ -648,15 +665,16 @@ class Window(QMainWindow):
             ('Lighting presets collection.part01.rar', 156, 0, 'queued'),
             ('Reference photography — vol. 04.zip', 592, 0, 'queued')]):
             rows.append({'message': i + 1, 'name': name, 'size': int(size * 1024**2), 'done': int(done * 1024**2), 'state': state, 'path': name, 'error': '',
-                         'verification': 'ok' if i == 0 else 'quarantined' if i == 1 else 'pending'})
-        summary = {'total': 5, 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 1}
+                         'verification': 'ok' if i == 0 else 'checking' if i == 1 else 'pending'})
+        summary = {'total': 5, 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 0}
         self.on_event('queue', {'rows': rows, 'summary': summary})
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
+        self.on_event('verification', {'name': rows[1]['name'], 'detail': 'Checking archive without a password: attempt 2/3…'})
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')
-        self.log('Architectural materials pack.zip: password required; moved to wrong_archives after 3 checks.')
+        self.log('Checking Architectural materials pack.zip in the background. Downloads continue.')
         self.log('Downloading archive 3 of 5. Partial files are saved automatically.')
         self.badge.setText('PREVIEW · SAMPLE DATA')
         self.footer.setText('Preview mode · Interface demonstration only · No real download is running')

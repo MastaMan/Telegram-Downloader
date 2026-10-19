@@ -92,6 +92,7 @@ class Store:
                 self.db.execute('PRAGMA user_version=1')
             self.db.execute("UPDATE jobs SET state='queued' WHERE state='downloading'")
             self.db.execute("UPDATE jobs SET verification='pending' WHERE verification='checking'")
+            self.db.execute("CREATE INDEX IF NOT EXISTS pending_archive_checks ON jobs(account,chat,message) WHERE state='done' AND verification='pending'")
 
     def cursor(self, account, chat):
         row = self.db.execute("SELECT cursor FROM scans WHERE account=? AND chat=?", (account, chat)).fetchone()
@@ -131,6 +132,11 @@ class Store:
     def next_check_job(self, account, chat, after=0):
         row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND message>? AND state='done' AND verification!='quarantined' ORDER BY message LIMIT 1",
                               (account, chat, after)).fetchone()
+        return dict(row) if row else None
+
+    def next_pending_check(self, account, chat):
+        row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND state='done' AND verification='pending' ORDER BY message LIMIT 1",
+                              (account, chat)).fetchone()
         return dict(row) if row else None
 
     def pending_quarantines(self, account, chat):

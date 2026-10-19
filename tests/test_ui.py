@@ -73,9 +73,10 @@ class UITests(unittest.TestCase):
     def test_verification_states_are_distinct_from_download_progress(self):
         window = Window(demo=True)
         self.assertEqual(window.table.item(0, 3).text(), 'Verified')
-        self.assertEqual(window.table.item(1, 3).text(), 'Quarantined')
+        self.assertEqual(window.table.item(1, 3).text(), 'Checking…')
         window.on_event('state', 'idle')
         self.assertTrue(window.verify_btn.isEnabled())
+        window.on_event('verification', None)
         window.on_event('checker', None)
         self.assertIn('not configured', window.checker_label.text())
         window.on_event('state', 'verifying')
@@ -84,6 +85,23 @@ class UITests(unittest.TestCase):
         window.on_event('phase', 'Checking archive without a password: attempt 2/3…')
         self.assertIn('Checking', window.file_status.text())
         self.assertIn('2/3', window.footer.text())
+        window.close()
+
+    def test_background_check_does_not_replace_download_display(self):
+        window = Window(demo=True)
+        original = (window.current_job, window.file_name.text(), window.file_bar.value(),
+                    window.speed_value.text(), window.eta_value.text(), window.file_status.text())
+        window.on_event('verification', {'name': 'previous.zip', 'detail': 'Checking archive without a password: attempt 3/3…'})
+        self.assertEqual(original, (window.current_job, window.file_name.text(), window.file_bar.value(),
+                                   window.speed_value.text(), window.eta_value.text(), window.file_status.text()))
+        self.assertIn('3/3', window.checker_label.text())
+        self.assertIn('previous.zip', window.checker_label.toolTip())
+        window.on_event('state', 'paused')
+        self.assertIn('paused', window.checker_label.text())
+        window.on_event('state', 'downloading')
+        self.assertIn('Checking', window.checker_label.text())
+        window.on_event('verification', None)
+        self.assertEqual(window.checker_label.text(), 'Automatic checks on')
         window.close()
 
     def test_qr_image_is_rendered_and_can_be_cancelled(self):

@@ -237,3 +237,136 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.job()['state'], 'done')
         self.assertEqual(self.job()['verification'], 'pending')
         self.assertTrue(self.source.exists())
+
+    def prepare_downloads(self, count=2):
+        self.engine.store.update(1, -10, 9, state='queued', done=0)
+        self.source.unlink()
+        for message in range(10, 9 + count):
+            self.engine.store.scanned(1, -10, message, {'document': 3, 'name': f'{message}.rar',
+                                      'size': 21, 'path': self.root / f'{message}.rar'})
+        self.engine.dialogs = {-10: SimpleNamespace(input_entity=-10), -20: SimpleNamespace(input_entity=-20)}
+        self.engine.client = SimpleNamespace(get_messages=AsyncMock(return_value=SimpleNamespace(document=SimpleNamespace(id=3, size=21))))
+
+    async def test_slow_check_does_not_block_next_download_and_queue_drains_once(self):
+        self.prepare_downloads(3)
+        checking, downloaded, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        checked = []
+        async def transfer(client, message, job, gate, progress):
+            if job['message'] == 10:
+                await checking.wait()
+            Path(job['path']).write_bytes(b'fixture archive bytes')
+            progress(job['size'], 0)
+            if job['message'] == 11:
+                downloaded.set()
+        async def check(path, executable, gate, report):
+            checked.append(path.name)
+            if path == self.source:
+                checking.set()
+                report('Checking archive without a password: attempt 1/3…')
+                await release.wait()
+                return CheckResult('bad', 'Confirmed password failure', 11)
+            return CheckResult('ok', 'Verified', 0)
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.download', transfer), patch('tgzip.engine.check_archive', check):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(downloaded.wait(), 1)
+            self.assertFalse(self.engine.task.done())
+            self.assertEqual(checked, ['sample.rar'])
+            self.assertEqual([row['state'] for row in self.engine.store.jobs(1, -10)], ['done', 'done', 'done'])
+            current = [value['message'] for name, value in self.events if name == 'current']
+            self.assertEqual(current, [9, 10, 11])
+            self.assertFalse(any(name == 'phase' for name, value in self.events))
+            release.set()
+            await asyncio.wait_for(self.engine.task, 1)
+        self.assertEqual(checked, ['sample.rar', '10.rar', '11.rar'])
+        self.assertEqual([row['verification'] for row in self.engine.store.jobs(1, -10)], ['quarantined', 'ok', 'ok'])
+        self.assertIsNone(self.engine.kind)
+        self.assertIn(('state', 'verifying'), self.events)
+
+    async def test_switch_chat_waits_for_both_download_and_winrar_cleanup(self):
+        self.prepare_downloads()
+        process = Process(hang=True)
+        downloading, stopped = asyncio.Event(), asyncio.Event()
+        async def transfer(client, message, job, gate, progress):
+            if job['message'] == 9:
+                Path(job['path']).write_bytes(b'fixture archive bytes')
+            else:
+                downloading.set()
+                try:
+                    await asyncio.sleep(60)
+                finally:
+                    stopped.set()
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.download', transfer), patch('tgzip.archive_check.asyncio.create_subprocess_exec', AsyncMock(return_value=process)):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(process.started.wait(), 1)
+            await asyncio.wait_for(downloading.wait(), 1)
+            await asyncio.wait_for(self.engine.command('select', chat=-20), 1)
+        self.assertTrue(stopped.is_set())
+        self.assertTrue(process.terminated)
+        self.assertIsNotNone(process.returncode)
+        self.assertEqual(self.engine.chat, -20)
+        first, second = self.engine.store.jobs(1, -10)
+        self.assertEqual((first['state'], first['verification']), ('done', 'pending'))
+        self.assertEqual(second['state'], 'queued')
+        self.assertEqual(self.engine.store.jobs(1, -20), [])
+
+    async def test_pause_holds_both_lanes_and_resume_finishes(self):
+        self.prepare_downloads()
+        process = Process(hang=True)
+        next_download, proceed = asyncio.Event(), asyncio.Event()
+        async def transfer(client, message, job, gate, progress):
+            if job['message'] == 10:
+                next_download.set()
+                await proceed.wait()
+                await gate.wait()
+            Path(job['path']).write_bytes(b'fixture archive bytes')
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.download', transfer), patch('tgzip.archive_check.asyncio.create_subprocess_exec', AsyncMock(side_effect=[process, Process()])):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(process.started.wait(), 1)
+            await asyncio.wait_for(next_download.wait(), 1)
+            await self.engine.command('pause')
+            process.finished.set()
+            proceed.set()
+            await asyncio.sleep(.03)
+            first, second = self.engine.store.jobs(1, -10)
+            self.assertEqual(first['verification'], 'checking')
+            self.assertEqual(second['state'], 'downloading')
+            self.assertFalse((self.root / '10.rar').exists())
+            await self.engine.command('resume')
+            await asyncio.wait_for(self.engine.task, 1)
+        self.assertTrue(all(row['verification'] == 'ok' for row in self.engine.store.jobs(1, -10)))
+
+    async def test_fatal_download_error_cancels_checker_and_reports_original_cause(self):
+        self.prepare_downloads()
+        process = Process(hang=True)
+        async def transfer(client, message, job, gate, progress):
+            if job['message'] == 9:
+                Path(job['path']).write_bytes(b'fixture archive bytes')
+            else:
+                await process.started.wait()
+                raise OSError('simulated disk failure')
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.download', transfer), patch('tgzip.archive_check.asyncio.create_subprocess_exec', AsyncMock(return_value=process)):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(self.engine.task, 1)
+        self.assertTrue(process.terminated)
+        self.assertEqual(self.job()['verification'], 'pending')
+        self.assertEqual(self.engine.store.jobs(1, -10)[1]['state'], 'error')
+        self.assertTrue(any(name == 'error' and 'OSError' in value for name, value in self.events))
+
+    async def test_restart_resumes_pending_checks_without_redownloading(self):
+        from tgzip.storage import Store
+        self.engine.store.update(1, -10, 9, verification='checking')
+        self.engine.store.close()
+        self.engine.store = Store(self.root / 'queue.sqlite3')
+        checker = AsyncMock(return_value=CheckResult('ok', 'Verified', 0))
+        transfer = AsyncMock()
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.download', transfer), patch('tgzip.engine.check_archive', checker):
+            await asyncio.wait_for(self.engine.download_queue(), 1)
+            await asyncio.wait_for(self.engine.download_queue(), 1)
+        checker.assert_awaited_once()
+        transfer.assert_not_awaited()
+        self.assertEqual(self.job()['verification'], 'ok')
+
+    async def test_checker_disappearing_leaves_pending_without_retry_loop(self):
+        with patch.object(self.engine, 'checker', side_effect=[Path('WinRAR.exe'), None]):
+            await asyncio.wait_for(self.engine.download_queue(), 1)
+        self.assertEqual(self.job()['verification'], 'pending')

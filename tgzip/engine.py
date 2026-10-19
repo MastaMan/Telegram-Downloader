@@ -15,6 +15,8 @@ from .archive_check import check_archive, find_winrar, quarantine_destination, m
 
 def error_text(exc):
     # Do not echo RPC request objects, credentials, QR tokens or arbitrary exception text.
+    while isinstance(exc, BaseExceptionGroup):
+        exc = exc.exceptions[0]
     if isinstance(exc, TransferError):
         return str(exc)
     if isinstance(exc, errors.PasswordHashInvalidError):
@@ -328,11 +330,50 @@ class Engine:
         self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
 
     async def download_queue(self):
-        account, chat = self.account, self.chat
         executable = self.checker()
         self.emit('checker', executable)
         if not executable:
             self.emit('log', 'WinRAR is not configured. Downloads will remain Unchecked. Select WinRAR… and use Check archives later.')
+        wake = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def produce():
+            await self.download_jobs(wake)
+            finished.set()
+            wake.set()
+            if executable and self.kind == 'downloading':
+                self.kind = 'verifying'
+                if self.gate.is_set():
+                    self.emit('state', 'verifying')
+
+        # Both tasks belong to the same operation. Stop, chat switching and close
+        # cancel and await them together, including the owned WinRAR process.
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(produce(), name='Archive downloads')
+            if executable:
+                tasks.create_task(self.verify_pending(wake, finished), name='Archive checks')
+        self.emit('log', 'Queue pass complete. Failed downloads can be retried with Start; failed checks with Check archives.')
+
+    async def verify_pending(self, wake, finished):
+        account, chat = self.account, self.chat
+        while True:
+            await self.gate.wait()
+            wake.clear()
+            job = self.store.next_pending_check(account, chat)
+            if job is not None:
+                if not self.checker():
+                    self.emit('checker', None)
+                    self.emit('log', 'WinRAR is no longer available. Remaining archives were kept Unchecked.')
+                    return
+                await self.verify_job(job, background=True)
+                await asyncio.sleep(0)
+            elif finished.is_set():
+                return
+            else:
+                await wake.wait()
+
+    async def download_jobs(self, wake):
+        account, chat = self.account, self.chat
         after = 0
         while (job := self.store.next_job(account, chat, after)) is not None:
             await self.gate.wait()
@@ -368,9 +409,13 @@ class Engine:
                         self.emit('log', f'Connection retry {attempt + 1}/3 ({type(exc).__name__}). Partial file saved.')
                         self.emit('speed_reset', None)
                         await asyncio.sleep(2 ** (attempt + 1))
-                self.store.update(account, chat, after, done=job['size'], state='done', error='')
+                self.store.update(account, chat, after, done=job['size'], state='done', error='',
+                                  verification='pending', verification_error='')
                 downloaded = True
-                await self.verify_job(job)
+                # The durable pending state is the check queue. Notify its one
+                # consumer, then continue downloading without awaiting WinRAR.
+                wake.set()
+                await asyncio.sleep(0)
             except asyncio.CancelledError:
                 if not downloaded:
                     self.store.update(account, chat, after, state='queued')
@@ -383,7 +428,6 @@ class Engine:
                 if isinstance(exc, OSError) and not isinstance(exc, ConnectionError):
                     raise
             self.snapshot()
-        self.emit('log', 'Queue pass complete. Failed files can be retried with Start.')
 
     def checker(self):
         return find_winrar(self.settings.get('winrar_path', ''))
@@ -410,7 +454,7 @@ class Engine:
             await self.verify_job(job)
         self.emit('log', 'Archive check complete. See each file status and tooltip for the result.')
 
-    async def verify_job(self, job):
+    async def verify_job(self, job, *, background=False):
         account, chat, message = self.account, self.chat, job['message']
         path = Path(job['path'])
         def update(**values):
@@ -433,12 +477,18 @@ class Engine:
             if re.search(r'\.part\d+\.rar$', job['name'], re.IGNORECASE):
                 update(verification='error', verification_error='Multipart RAR: check the complete set manually in WinRAR. No files were moved.')
                 return
-            self.emit('current', job)
-            self.emit('progress', {'done': job['size'], 'size': job['size'], 'speed': 0,
-                                  'message': message, 'summary': self.store.summary(account, chat)})
+            if not background:
+                self.emit('current', job)
+                self.emit('progress', {'done': job['size'], 'size': job['size'], 'speed': 0,
+                                      'message': message, 'summary': self.store.summary(account, chat)})
             update(verification='checking', verification_error='')
             self.snapshot()
-            result = await check_archive(path, executable, self.gate, lambda text: self.emit('phase', text))
+            def report(text):
+                self.emit('verification', {'name': job['name'], 'detail': text})
+                if not background:
+                    self.emit('phase', text)
+            report('Waiting to check archive…')
+            result = await check_archive(path, executable, self.gate, report)
             if result.status == 'bad':
                 destination = quarantine_destination(path)
                 update(verification='quarantining', quarantine_path=str(destination), verification_error=result.detail)
@@ -456,4 +506,5 @@ class Engine:
             update(verification='error', verification_error=f'Archive check or move failed ({type(exc).__name__}). Inspect the original and quarantine paths before retrying.')
             self.emit('log', f'File #{message}: archive check or move failed ({type(exc).__name__}).')
         finally:
+            self.emit('verification', None)
             self.snapshot()

@@ -22,7 +22,7 @@ For a desktop shortcut, right-click `Start.bat` → **Show more options → Send
 - Dark desktop interface with current-file and overall progress, transfer speed, estimated file time remaining, a persistent queue, and an activity panel.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
-- Automatic checks with installed WinRAR after each download, plus **Check archives** for previously downloaded files. Three confirmed password/archive failures move the file to `wrong_archives` without overwriting existing files.
+- Automatic background checks with installed WinRAR after each download, while the next file downloads, plus **Check archives** for previously downloaded files. Three confirmed password/archive failures move the file to `wrong_archives` without overwriting existing files.
 - Pause, resume, stop, network retries, rate-limit waits, and resumable `.part` files.
 - Durable SQLite queue and incremental history-scan checkpoints, isolated by Telegram account and chat.
 - QR sign-in with automatic code refresh and optional two-step verification password.
@@ -35,7 +35,7 @@ For a desktop shortcut, right-click `Start.bat` → **Show more options → Send
 
 Install [WinRAR for Windows](https://www.win-rar.com/download.html) to enable archive checks. The app detects standard installations; otherwise use **WinRAR…** to select `WinRAR.exe`. The selected path is remembered. WinRAR is a separate licensed application and is not bundled or installed by the Python setup. Downloads work without it and remain **Unchecked**.
 
-Checks follow the supplied `check_archives.bat` policy: test without a password, retry up to three times, and move only when all three results are codes 2, 3, or 11. Operational errors leave files in place. Files move to `wrong_archives` inside their existing chat download folder and are not downloaded again. Use **Check archives** to test the current chat's previously downloaded files; hover over any status for details. This does not guess passwords or accept archive passwords.
+Checks follow the supplied `check_archives.bat` policy: test without a password, retry up to three times, and move only when all three results are codes 2, 3, or 11. Operational errors leave files in place. Files move to `wrong_archives` inside their existing chat download folder and are not downloaded again. One download and one archive check can run at the same time. If checking takes longer, completed files wait in a saved check queue. **Start** also resumes pending checks after a stop or restart. Pause, Stop, chat switching, and closing the window apply to both operations. The app finishes the remaining check queue after the last download. Use **Check archives** to recheck the current chat's previously downloaded files; hover over any status for details. This does not guess passwords or accept archive passwords.
 
 After updating, click **Scan archives** once in each saved chat to discover historical RAR attachments. Existing downloaded ZIPs, partial files, credentials, and selected chats are retained. The application data folder remains `%LOCALAPPDATA%\TelegramZipDesktop` for compatibility. Launching still uses only **Start.bat**.
 

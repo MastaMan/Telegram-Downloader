@@ -87,7 +87,7 @@ On the first launch after upgrading from the ZIP-only release, scan checkpoints 
 
 The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan archives to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
 
-Click **Start** after scanning to process the saved queue, one file at a time. Start also retries failed items once per queue pass. Completed items are skipped.
+Click **Start** after scanning to process the saved queue, one file at a time. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
 
 The interface shows:
 
@@ -111,7 +111,11 @@ The queue processes every saved entry. For responsiveness, the table displays th
 
 Install [WinRAR for Windows](https://www.win-rar.com/download.html). A standard installation is detected automatically. If the application shows **WinRAR not configured**, click **WinRAR…** and select the installed `WinRAR.exe`. Use the GUI executable, not `Rar.exe`: WinRAR detects content, including ZIP archives named `.rar`. This preference is saved. WinRAR is separate software with its own license; Python dependency setup does not install it.
 
-Every new complete download is automatically tested when WinRAR is available. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
+Every new complete download immediately joins a durable background check queue when WinRAR is available. One archive is checked at a time while the next archive downloads, so a slow WinRAR test does not block the transfer queue. If downloads outpace checks, completed files wait as Unchecked. After the last download, the app finishes remaining checks before returning to Ready.
+
+The small indicator beside **WinRAR…** shows the active check and attempt number; hover over it for the checked filename. The main download card continues showing the file being downloaded, with its own speed and progress.
+
+**Start** resumes pending checks after Stop or restart, even if there are no new downloads. Files already Verified, Quarantined, or Check failed are not automatically rechecked. Use Check archives to retry failed checks or recheck completed files. Checks start only on Start or Check archives, not automatically when opening the app. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
 
 The policy follows the supplied BAT: run `WinRAR.exe t -p- -ibck -inul <archive>`, with up to three attempts and a three-second delay between attempts. Any success stops retrying. Only three results from codes **2** (fatal archive error), **3** (checksum error), and **11** (wrong/required password) qualify for quarantine. Any other result prevents quarantine, even if other attempts return an eligible code. This tests whether an archive can be read without a password; it does not guess, recover, save, or ask for archive passwords. Code 2 is a broad fatal-error category, so inspect quarantined files manually before discarding them.
 
@@ -123,9 +127,9 @@ WinRAR's test checks archive integrity; **Verified** does not mean antivirus-sca
 
 ## 8. Pause, resume, stop, and close
 
-**Pause** suspends a download, scan, or archive-check queue. A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
+**Pause** suspends both the active download and its background check queue (or the active scan/manual check). A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
 
-**Stop** cancels the active operation, including a pending network read, rate-limit wait, or this app's WinRAR process. An interrupted check remains Unchecked; retry it with Check archives. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan archives to continue scanning.
+**Stop** cancels the active operation, including a pending network read, rate-limit wait, or this app's WinRAR process. An interrupted check and any waiting checks remain Unchecked; Start resumes them, or use Check archives. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan archives to continue scanning.
 
 Closing the main window disables controls, stops any WinRAR process it started, flushes the current partial file, saves queue/session state, disconnects Telethon, and waits for the worker to finish. The window closes after cleanup. Do not kill the process while this message is shown unless it is genuinely stuck.
 
