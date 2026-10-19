@@ -249,6 +249,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_slow_check_does_not_block_next_download_and_queue_drains_once(self):
         self.prepare_downloads(3)
+        self.engine.settings['parallel_downloads'] = 1
         checking, downloaded, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         checked = []
         async def transfer(client, message, job, gate, progress):

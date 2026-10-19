@@ -1,5 +1,17 @@
 # Validation and release limits
 
+## Parallel archive downloads — 19 October 2026
+
+**107 tests per runtime: 106 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip remains Windows DPAPI.
+
+A 43-file simulated queue proves that 20 transfers overlap, the pool never exceeds 20, freeing one slot starts the next file while others remain blocked, and each file is claimed once. Aggregate progress and speed are checked. A separate test uses the real file transfer code with three synthetic streams: pausing holds in-flight chunks, Stop flushes and closes every stream, and reopening the SQLite store resumes every partial at the saved offset. Other checks cover independent file failure, saved and bounded concurrency settings, rejecting setting changes while busy, per-file UI progress, combined metrics, and pause status across rows. Existing archive-check, cancellation, and update tests remain passing.
+
+The real Qt demo was rendered and visually inspected at 1220×850 and 1000×680. The parallel setting fits in the sidebar without reducing the queue area. Sample data illustrates multiple active files and a background archive check.
+
+No live Telegram account, Windows desktop, or actual WinRAR was used. Real throughput with 20 Telegram transfers still needs user acceptance testing. The previously inspected Windows Actions run was blocked before any test started because GitHub reported an account billing lock; these local results do not establish Windows CI success.
+
+For Windows acceptance, update the app, leave Parallel downloads at 20, and start a queue with more than 20 archives. Confirm multiple rows advance, freed slots refill, Pause/Resume affects all transfers, and Stop/restart resumes partial files. Confirm archive checks continue independently. If Telegram repeatedly requires a wait, stop and lower Parallel downloads.
+
 ## Compact interface and automatic updates — 19 October 2026
 
 The update ran **102 tests per runtime: 101 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip is the Windows-only DPAPI test. The compact interface was rendered and visually inspected; the default window shows approximately 11 queue rows with Activity collapsed, compared with roughly four previously.

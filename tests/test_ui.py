@@ -41,7 +41,8 @@ class UITests(unittest.TestCase):
         self.assertEqual(window.table.rowCount(), 12)
         self.assertFalse(window.activity.isVisible())
         self.assertGreaterEqual(window.table.viewport().height() // 32, 9)
-        self.assertEqual(window.file_bar.value(), 620)
+        self.assertEqual(window.file_bar.value(), window.overall_bar.value())
+        self.assertEqual(window.file_name.text(), '4 active downloads')
         self.assertIn('18.6', window.speed_value.text())
         self.assertTrue(window.chat_box.isEnabled())
         self.assertFalse(window.start_btn.isEnabled())
@@ -116,6 +117,27 @@ class UITests(unittest.TestCase):
         window.on_event('update_progress', 'You are up to date.')
         window.on_event('state', 'idle')
         self.assertEqual(window.footer.text(), 'You are up to date.')
+        window.close()
+
+    def test_parallel_display_retains_totals_and_updates_each_file(self):
+        window = Window(demo=True)
+        self.assertEqual(window.parallel_box.currentData(), 20)
+        self.assertFalse(window.parallel_box.isEnabled())
+        summary = dict(window.transfers_info['summary'])
+        original = (window.file_name.text(), window.file_bar.value(), window.speed_value.text())
+        window.on_event('progress', {'done': 70, 'size': 100, 'speed': 1024,
+                                    'message': 4, 'summary': summary})
+        self.assertEqual(window.table.item(3, 2).text(), '70%')
+        self.assertEqual(original, (window.file_name.text(), window.file_bar.value(), window.speed_value.text()))
+        window.on_event('state', 'paused')
+        self.assertEqual(window.table.item(3, 3).text(), 'Paused')
+        self.assertEqual(window.speed_value.text(), '—')
+        window.on_event('state', 'downloading')
+        self.assertEqual(window.table.item(3, 3).text(), 'Downloading')
+        window.on_event('state', 'idle')
+        self.assertTrue(window.parallel_box.isEnabled())
+        window.on_event('settings', {'parallel_downloads': 5})
+        self.assertEqual(window.parallel_box.currentData(), 5)
         window.close()
 
     def test_qr_image_is_rendered_and_can_be_cancelled(self):

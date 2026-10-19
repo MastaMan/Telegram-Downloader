@@ -149,6 +149,138 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.count('message'), 2)
         self.assertEqual(self.engine.store.jobs(123, -100)[0]['state'], 'done')
 
+    def queue_files(self, count, size=100):
+        self.engine.chat = -100
+        for number in range(1, count + 1):
+            self.engine.store.scanned(123, -100, number, {
+                'document': number, 'name': f'{number}.zip', 'size': size,
+                'path': self.root / f'{number}.zip'})
+        async def get_messages(entity, ids):
+            return SimpleNamespace(document=SimpleNamespace(id=ids, size=size), media=ids)
+        self.engine.client = SimpleNamespace(get_messages=get_messages)
+
+    async def test_twenty_downloads_overlap_refill_and_claim_each_file_once(self):
+        self.queue_files(43)
+        releases = {number: asyncio.Event() for number in range(1, 44)}
+        started = asyncio.Queue()
+        active, visited = set(), []
+        peak = 0
+        async def transfer(client, message, job, gate, progress):
+            nonlocal peak
+            number = job['message']
+            active.add(number)
+            visited.append(number)
+            peak = max(peak, len(active))
+            progress(25, 100)
+            started.put_nowait(number)
+            try:
+                await releases[number].wait()
+                progress(100, 0)
+            finally:
+                active.remove(number)
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            task = asyncio.create_task(self.engine.download_queue())
+            try:
+                first = [await asyncio.wait_for(started.get(), 2) for _ in range(20)]
+                self.assertEqual(first, list(range(1, 21)))
+                self.assertTrue(started.empty())
+                aggregate = [value for name, value in self.events if name == 'transfers'][-1]
+                self.assertEqual(aggregate['active'], 20)
+                self.assertEqual(aggregate['speed'], 2000)
+                self.assertEqual(aggregate['summary']['received'], 500)
+                releases[7].set()
+                self.assertEqual(await asyncio.wait_for(started.get(), 2), 21)
+                self.assertFalse(releases[1].is_set())
+                for release in releases.values():
+                    release.set()
+                await asyncio.wait_for(task, 2)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(peak, 20)
+        self.assertEqual(sorted(visited), list(range(1, 44)))
+        self.assertEqual(self.engine.store.summary(123, -100)['complete'], 43)
+        self.assertFalse(self.engine.transfers)
+
+    async def test_parallel_pause_stop_and_restart_resume_every_partial(self):
+        from tgzip.storage import CHUNK, Store
+        self.queue_files(3, CHUNK * 2)
+        self.engine.settings['parallel_downloads'] = 3
+        blocked = asyncio.Queue()
+        release = asyncio.Event()
+        closed, offsets = [], []
+        class Stream:
+            def __init__(stream, number, offset):
+                stream.number, stream.offset = number, offset
+            def __aiter__(stream):
+                return stream
+            async def __anext__(stream):
+                if stream.offset == CHUNK:
+                    blocked.put_nowait(stream.number)
+                    await release.wait()
+                if stream.offset >= CHUNK * 2:
+                    raise StopAsyncIteration
+                stream.offset += CHUNK
+                return b'x' * CHUNK
+            async def close(stream):
+                closed.append(stream.number)
+        def iter_download(media, offset, **kwargs):
+            offsets.append((media, offset))
+            return Stream(media, offset)
+        self.engine.client.iter_download = iter_download
+        with patch.object(self.engine, 'checker', return_value=None):
+            self.engine.launch('downloading', self.engine.download_queue)
+            for _ in range(3):
+                await asyncio.wait_for(blocked.get(), 2)
+            await self.engine.command('pause')
+            release.set()
+            # Let all in-flight chunks reach the shared pause gate.
+            for _ in range(10):
+                await asyncio.sleep(0)
+            for number in range(1, 4):
+                self.assertEqual((self.root / f'{number}.zip.part').stat().st_size, CHUNK)
+                self.assertFalse((self.root / f'{number}.zip').exists())
+            await asyncio.wait_for(self.engine.command('stop'), 2)
+            self.assertEqual(sorted(closed), [1, 2, 3])
+            self.assertTrue(all(job['state'] == 'queued' and job['done'] == CHUNK
+                                for job in self.engine.store.jobs(123, -100)))
+            self.assertFalse(self.engine.transfers)
+            self.engine.store.close()
+            self.engine.store = Store(self.root / 'queue.sqlite3')
+            await asyncio.wait_for(self.engine.download_queue(), 2)
+        self.assertEqual(sorted(offsets), [(1, 0), (1, CHUNK), (2, 0), (2, CHUNK), (3, 0), (3, CHUNK)])
+        self.assertEqual(self.engine.store.summary(123, -100)['complete'], 3)
+        for number in range(1, 4):
+            self.assertEqual((self.root / f'{number}.zip').stat().st_size, CHUNK * 2)
+
+    async def test_parallel_failure_does_not_retry_forever_or_block_other_files(self):
+        from tgzip.transfer import TransferError
+        self.queue_files(25)
+        visited = []
+        async def transfer(client, message, job, gate, progress):
+            visited.append(job['message'])
+            await asyncio.sleep(0)
+            if job['message'] == 2:
+                raise TransferError('Fixture attachment unavailable.')
+            progress(100, 0)
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            await asyncio.wait_for(self.engine.download_queue(), 2)
+        self.assertEqual(sorted(visited), list(range(1, 26)))
+        self.assertEqual(self.engine.store.summary(123, -100)['complete'], 24)
+        self.assertEqual(self.engine.store.summary(123, -100)['failed'], 1)
+
+    async def test_parallel_setting_is_bounded_persistent_and_locked_while_busy(self):
+        from tgzip.storage import parallel_downloads
+        from tgzip.transfer import TransferError
+        self.assertEqual([parallel_downloads(value) for value in (None, 'bad', 0, -1, 99, 4)],
+                         [20, 20, 1, 1, 20, 4])
+        await self.engine.command('parallel', value=5)
+        self.assertEqual(json.loads(self.engine.settings_path.read_text())['parallel_downloads'], 5)
+        self.engine.launch('downloading', lambda: asyncio.sleep(60))
+        with self.assertRaises(TransferError):
+            await self.engine.command('parallel', value=10)
+        self.assertEqual(self.engine.settings['parallel_downloads'], 5)
+
     async def test_qr_expiry_two_factor_retry_and_password_not_saved(self):
         engine = self.engine
         passwords = iter(['incorrect fixture', 'correct fixture'])

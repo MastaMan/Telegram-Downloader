@@ -8,6 +8,14 @@ from pathlib import Path
 CHUNK = 512 * 1024
 
 
+def parallel_downloads(value=None):
+    """Use a bounded pool even if settings were edited outside the app."""
+    try:
+        return max(1, min(20, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 20
+
+
 def atomic_write(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")

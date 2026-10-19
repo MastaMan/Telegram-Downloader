@@ -9,7 +9,7 @@ from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
-from .storage import Store, atomic_write, load_settings, safe_name, archive_extension
+from .storage import parallel_downloads, Store, atomic_write, load_settings, safe_name, archive_extension
 from .transfer import download, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from updater import UpdateError, prepare_update, load_plan
@@ -84,6 +84,7 @@ class Engine:
         self.password_future = None
         self.closing = False
         self.control = asyncio.Lock()
+        self.transfers = {}
 
     def save_settings(self):
         atomic_write(self.settings_path, json.dumps(self.settings, indent=2).encode('utf-8'))
@@ -181,6 +182,12 @@ class Engine:
                 self.snapshot()
             elif command == 'folder':
                 self.settings['download_dir'] = str(Path(args['path']).resolve())
+                self.save_settings()
+                self.emit('settings', self.settings)
+            elif command == 'parallel':
+                if self.task and not self.task.done():
+                    raise TransferError('Stop the current operation before changing parallel downloads.')
+                self.settings['parallel_downloads'] = parallel_downloads(args['value'])
                 self.save_settings()
                 self.emit('settings', self.settings)
             elif command == 'scan':
@@ -398,62 +405,94 @@ class Engine:
             else:
                 await wake.wait()
 
+    def emit_transfers(self):
+        now = time.monotonic()
+        summary = self.store.summary(self.account, self.chat)
+        speed = sum(row['speed'] for row in self.transfers.values()
+                    if now - row['updated'] < 4) if self.gate.is_set() else 0
+        self.emit('transfers', {'active': len(self.transfers), 'speed': speed,
+                               'summary': summary})
+
     async def download_jobs(self, wake):
         account, chat = self.account, self.chat
         after = 0
-        while (job := self.store.next_job(account, chat, after)) is not None:
-            await self.gate.wait()
-            after = job['message']
-            self.emit('current', job)
-            self.store.update(account, chat, after, state='downloading', error='')
-            downloaded = False
-            def progress(done, speed):
-                self.store.update(account, chat, job['message'], done=done)
-                self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
-                                       'message': job['message'], 'summary': self.store.summary(account, chat)})
-            try:
-                for attempt in range(4):
-                    try:
-                        await self.gate.wait()
-                        # Fresh message refreshes expired file references on every retry/resume.
-                        message = await self.client.get_messages(self.dialogs[chat].input_entity, ids=job['message'])
-                        if not message or not message.document:
-                            raise TransferError('Message was deleted or the attachment is no longer accessible.')
-                        if str(message.document.id) != job['document'] or message.document.size != job['size']:
-                            raise TransferError('The attachment changed since scanning. The old partial file was preserved.')
-                        await download(self.client, message, job, self.gate, progress)
-                        break
-                    except errors.FloodWaitError as exc:
-                        self.emit('log', f'Telegram rate limit: waiting {exc.seconds} seconds. Stop remains available.')
-                        self.emit('speed_reset', None)
-                        await asyncio.sleep(exc.seconds)
-                        if attempt == 3:
-                            raise
-                    except (ConnectionError, asyncio.TimeoutError, errors.FileReferenceExpiredError, errors.ServerError) as exc:
-                        if attempt == 3:
-                            raise
-                        self.emit('log', f'Connection retry {attempt + 1}/3 ({type(exc).__name__}). Partial file saved.')
-                        self.emit('speed_reset', None)
-                        await asyncio.sleep(2 ** (attempt + 1))
-                self.store.update(account, chat, after, done=job['size'], state='done', error='',
-                                  verification='pending', verification_error='')
-                downloaded = True
-                # The durable pending state is the check queue. Notify its one
-                # consumer, then continue downloading without awaiting WinRAR.
-                wake.set()
-                await asyncio.sleep(0)
-            except asyncio.CancelledError:
-                if not downloaded:
-                    self.store.update(account, chat, after, state='queued')
+
+        async def worker():
+            nonlocal after
+            while True:
+                await self.gate.wait()
+                # Claim without yielding: all workers and SQLite share this event loop.
+                # The cursor advances even on failure, so retries wait for the next Start.
+                job = self.store.next_job(account, chat, after)
+                if job is None:
+                    return
+                after = job['message']
+                await self.download_job(job, wake, account, chat)
+
+        self.emit_transfers()
+        async with asyncio.TaskGroup() as tasks:
+            for index in range(parallel_downloads(self.settings.get('parallel_downloads'))):
+                tasks.create_task(worker(), name=f'Download {index + 1}')
+
+    async def download_job(self, job, wake, account, chat):
+        after = job['message']
+        self.transfers[after] = {'done': job['done'], 'size': job['size'], 'speed': 0, 'updated': time.monotonic()}
+        self.emit_transfers()
+        self.emit('current', job)
+        self.store.update(account, chat, after, state='downloading', error='')
+        downloaded = False
+        def progress(done, speed):
+            self.store.update(account, chat, job['message'], done=done)
+            self.transfers[after].update(done=done, speed=speed, updated=time.monotonic())
+            self.emit_transfers()
+            self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
+                                   'message': job['message'], 'summary': self.store.summary(account, chat)})
+        try:
+            for attempt in range(4):
+                try:
+                    await self.gate.wait()
+                    # Fresh message refreshes expired file references on every retry/resume.
+                    message = await self.client.get_messages(self.dialogs[chat].input_entity, ids=job['message'])
+                    if not message or not message.document:
+                        raise TransferError('Message was deleted or the attachment is no longer accessible.')
+                    if str(message.document.id) != job['document'] or message.document.size != job['size']:
+                        raise TransferError('The attachment changed since scanning. The old partial file was preserved.')
+                    await download(self.client, message, job, self.gate, progress)
+                    break
+                except errors.FloodWaitError as exc:
+                    self.emit('log', f'Telegram rate limit: waiting {exc.seconds} seconds. Stop remains available.')
+                    progress(self.transfers[after]['done'], 0)
+                    await asyncio.sleep(exc.seconds)
+                    if attempt == 3:
+                        raise
+                except (ConnectionError, asyncio.TimeoutError, errors.FileReferenceExpiredError, errors.ServerError) as exc:
+                    if attempt == 3:
+                        raise
+                    self.emit('log', f'Connection retry {attempt + 1}/3 ({type(exc).__name__}). Partial file saved.')
+                    progress(self.transfers[after]['done'], 0)
+                    await asyncio.sleep(2 ** (attempt + 1))
+            self.store.update(account, chat, after, done=job['size'], state='done', error='',
+                              verification='pending', verification_error='')
+            downloaded = True
+            # The durable pending state is the check queue. Notify its one
+            # consumer, then continue downloading without awaiting WinRAR.
+            wake.set()
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            if not downloaded:
+                self.store.update(account, chat, after, state='queued')
+            raise
+        except Exception as exc:
+            reason = error_text(exc)
+            self.store.update(account, chat, after, state='error', error=reason)
+            self.emit('log', f'File #{after}: {reason}')
+            # Disk errors should not cause the rest of the queue to fail in a loop.
+            if isinstance(exc, OSError) and not isinstance(exc, ConnectionError):
                 raise
-            except Exception as exc:
-                reason = error_text(exc)
-                self.store.update(account, chat, after, state='error', error=reason)
-                self.emit('log', f'File #{after}: {reason}')
-                # Disk errors should not cause the rest of the queue to fail in a loop.
-                if isinstance(exc, OSError) and not isinstance(exc, ConnectionError):
-                    raise
-            self.snapshot()
+        finally:
+            self.transfers.pop(after, None)
+            self.emit_transfers()
+        self.snapshot()
 
     def checker(self):
         return find_winrar(self.settings.get('winrar_path', ''))

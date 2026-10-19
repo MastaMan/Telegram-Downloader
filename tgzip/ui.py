@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
+from .storage import parallel_downloads
 
 STYLE = '''
 QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 13px; }
@@ -202,6 +203,7 @@ class Window(QMainWindow):
         self.state = 'idle'
         self.folder = ''
         self.current_job = None
+        self.transfers_info = None
         self.queue_rows = {}
         self.qr_dialog = None
         self.password_dialog = None
@@ -300,6 +302,17 @@ class Window(QMainWindow):
         self.open_btn = button('Open', self.open_folder)
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
+        parallel_row = QHBoxLayout()
+        parallel_row.addWidget(label('Parallel downloads', 'muted'))
+        self.parallel_box = QComboBox()
+        for count in range(1, 21):
+            self.parallel_box.addItem(str(count), count)
+        self.parallel_box.setCurrentIndex(19)
+        self.parallel_box.setToolTip('Simultaneous downloads. Stop the queue before changing this setting.')
+        self.parallel_box.currentIndexChanged.connect(
+            lambda: self.send('parallel', value=self.parallel_box.currentData()))
+        parallel_row.addWidget(self.parallel_box)
+        dest_layout.addLayout(parallel_row)
         sidebar.addWidget(dest_card)
         sidebar.addStretch()
         body.addWidget(sidebar_widget)
@@ -468,6 +481,7 @@ class Window(QMainWindow):
         self.connect_btn.setVisible(not self.account)
         self.settings_btn.setEnabled(idle)
         self.update_btn.setEnabled(idle)
+        self.parallel_box.setEnabled(idle)
         self.logout_btn.setEnabled(idle and bool(self.account))
         self.logout_btn.setVisible(bool(self.account))
         self.refresh_btn.setEnabled(idle and bool(self.account))
@@ -479,6 +493,20 @@ class Window(QMainWindow):
         self.queue_caption.setText(f'{summary["total"]:,} files · {summary["failed"]} failed · {summary.get("quarantined", 0)} quarantined')
         self.overall_bar.setValue(round(1000 * summary['received'] / max(1, summary['bytes'])))
         self.total_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
+
+    def render_transfers(self):
+        value = self.transfers_info
+        summary = value['summary']
+        percent = summary['received'] / max(1, summary['bytes'])
+        speed = value['speed'] if self.state == 'downloading' else 0
+        self.file_name.setText(f"{value['active']} active downloads" if value['active'] else 'Download queue')
+        self.file_name.setToolTip('Total progress across all archives. Individual progress is shown in the queue.')
+        self.file_bar.setValue(round(percent * 1000))
+        self.percent_label.setText(f'{percent:.0%}')
+        self.byte_label.setText(f"{size_text(summary['received'])} of {size_text(summary['bytes'])}")
+        self.speed_value.setText(size_text(speed) + '/s' if speed else '—')
+        self.eta_value.setText(eta_text((summary['bytes'] - summary['received']) / speed if speed else None))
+        self.update_summary(summary)
 
     def update_verification_indicator(self):
         if self.verification_info:
@@ -502,10 +530,20 @@ class Window(QMainWindow):
             if value in {'idle', 'paused', 'verifying'}:
                 self.on_event('speed_reset', None)
             self.update_verification_indicator()
+            if value in {'paused', 'downloading'}:
+                for row in range(self.table.rowCount()):
+                    status = self.table.item(row, 3)
+                    if status and status.text() in {'Downloading', 'Paused'}:
+                        status.setText('Paused' if value == 'paused' else 'Downloading')
             if value == 'idle' and self.current_job:
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'transfers':
+            self.transfers_info = value
+            self.current_job = None
+            self.last_progress = time.monotonic()
+            self.render_transfers()
         elif name == 'update_progress':
             self.footer.setText(value)
         elif name == 'update_ready':
@@ -527,6 +565,9 @@ class Window(QMainWindow):
             if not value:
                 self.log('Welcome. Open API settings to connect your Telegram account.')
         elif name == 'settings':
+            self.parallel_box.blockSignals(True)
+            self.parallel_box.setCurrentIndex(parallel_downloads(value.get('parallel_downloads')) - 1)
+            self.parallel_box.blockSignals(False)
             self.folder = value.get('download_dir', '')
             self.folder_label.setText(Path(self.folder).name if self.folder else 'Choose a download folder')
             self.folder_label.setToolTip(self.folder)
@@ -551,6 +592,9 @@ class Window(QMainWindow):
             self.chat_box.blockSignals(False)
             self.chat_box.setToolTip(self.chat_box.currentText())
         elif name == 'current':
+            if value and self.transfers_info is not None and self.state == 'downloading':
+                return
+            self.transfers_info = None
             self.current_job = value
             if value and self.state == 'downloading':
                 self.file_status.setText('Downloading')
@@ -564,11 +608,12 @@ class Window(QMainWindow):
         elif name == 'progress':
             self.last_progress = time.monotonic()
             percent = value['done'] / max(1, value['size'])
-            self.file_bar.setValue(round(percent * 1000))
-            self.percent_label.setText(f'{percent:.0%}')
-            self.byte_label.setText(f'{size_text(value["done"])} of {size_text(value["size"])}')
-            self.speed_value.setText(size_text(value['speed']) + '/s' if value['speed'] else '—')
-            self.eta_value.setText(eta_text((value['size'] - value['done']) / value['speed'] if value['speed'] else None))
+            if self.transfers_info is None:
+                self.file_bar.setValue(round(percent * 1000))
+                self.percent_label.setText(f'{percent:.0%}')
+                self.byte_label.setText(f'{size_text(value["done"])} of {size_text(value["size"])}')
+                self.speed_value.setText(size_text(value['speed']) + '/s' if value['speed'] else '—')
+                self.eta_value.setText(eta_text((value['size'] - value['done']) / value['speed'] if value['speed'] else None))
             if value['message'] in self.queue_rows:
                 row = self.queue_rows[value['message']]
                 self.table.item(row, 2).setText(f'{percent:.0%}')
@@ -671,9 +716,9 @@ class Window(QMainWindow):
             ('Studio textures — collection 01.zip', 428, 428, 'done'),
             ('Architectural materials pack.zip', 820, 820, 'done'),
             ('Environment assets — autumn.rar', 1240, 768.8, 'downloading'),
-            ('Lighting presets collection.part01.rar', 156, 0, 'queued'),
-            ('Reference photography — vol. 04.zip', 592, 0, 'queued'),
-            ('Concrete surfaces.rar', 318, 0, 'queued'),
+            ('Lighting presets collection.part01.rar', 156, 62.4, 'downloading'),
+            ('Reference photography — vol. 04.zip', 592, 177.6, 'downloading'),
+            ('Concrete surfaces.rar', 318, 31.8, 'downloading'),
             ('Wood textures — 4K.zip', 760, 0, 'queued'),
             ('Interior lighting references.zip', 96, 0, 'queued'),
             ('Outdoor furniture pack.rar', 684, 0, 'queued'),
@@ -687,10 +732,11 @@ class Window(QMainWindow):
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
+        self.on_event('transfers', {'active': 4, 'speed': 18.6 * 1024**2, 'summary': summary})
         self.on_event('verification', {'name': rows[1]['name'], 'detail': 'Checking archive without a password: attempt 2/3…'})
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')
         self.log('Checking Architectural materials pack.zip in the background. Downloads continue.')
-        self.log('Downloading archive 3 of 12. Partial files are saved automatically.')
+        self.log('Downloading 4 archives in parallel. Partial files are saved automatically.')
         self.badge.setText('PREVIEW · SAMPLE DATA')
         self.footer.setText('Preview mode · Interface demonstration only · No real download is running')

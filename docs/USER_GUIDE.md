@@ -87,7 +87,7 @@ On the first launch after upgrading from the ZIP-only release, scan checkpoints 
 
 The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan archives to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
 
-Click **Start** after scanning to process the saved queue, one file at a time. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
+Click **Start** after scanning to process the saved queue with up to **20 simultaneous downloads** by default. Use **Parallel downloads** under the destination folder to choose a limit from 1 to 20. Stop the queue before changing the limit; your selection is saved between launches. Each free slot starts the next archive immediately, without waiting for the other downloads to finish. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
 
 The compact interface gives most of the window to the queue. **Activity** expands or collapses the session log; it is collapsed by default. Extra explanations are available in tooltips.
 
@@ -95,9 +95,10 @@ The interface shows:
 
 | Display | Meaning |
 | --- | --- |
-| Current download bar | Bytes saved for the current archive |
-| Transfer speed | Recent download rate; resets when paused or stalled |
-| File time left | Estimate for the current file, based on recent speed |
+| Main download bar | Received bytes across the full queue; the title shows the number of active downloads |
+| Row progress | Bytes saved for each individual archive |
+| Transfer speed | Combined recent speed of active downloads; resets when paused or stalled |
+| Time left | Estimated remaining queue download time, based on combined speed; archive check time is not included |
 | Files downloaded | Full byte count received divided by all discovered files; includes quarantined files |
 | Green queue bar | Received bytes across the queue; a failed partial file can still contribute bytes |
 | Unchecked | Download complete; no successful WinRAR test yet |
@@ -179,7 +180,7 @@ To remove the application, sign out first if possible, close it, then delete its
 | Channel missing | Confirm account ID and access in the official app, then Refresh chats. |
 | No files found | Check that attachments have `.zip` / `.rar` names, or a matching MIME type when nameless. Scan only processes messages newer than its saved checkpoint. |
 | Telegram rate limit | Activity shows the required wait. Leave it running, or Stop and try later. |
-| Slow downloads | Speed depends on Telegram, your connection and account limits. One sequential download is intentional. |
+| Slow downloads | Speed depends on Telegram, your connection and account limits. Use Parallel downloads to choose 1–20 simultaneous transfers. More transfers do not guarantee proportionally more speed; reduce the limit if Telegram repeatedly asks you to wait. |
 | Disk full or permission error | Free space or restore permission for the recorded path, then Start. Existing queue entries do not change paths when the base folder changes. |
 | Unchecked | Install WinRAR, select WinRAR.exe with WinRAR…, then click Check archives. |
 | Check failed | Hover over the row. Check permissions, file existence, available memory, and WinRAR installation. Multipart sets require a manual test. |
