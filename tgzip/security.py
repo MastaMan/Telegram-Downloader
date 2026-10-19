@@ -36,7 +36,7 @@ def _crypt(data, decrypt=False):
     buf = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
     source, result = Blob(len(data), buf), Blob()
     fn = crypt32.CryptUnprotectData if decrypt else crypt32.CryptProtectData
-    desc = None if decrypt else "Telegram ZIP Desktop"
+    desc = None if decrypt else "Telegram Archive Desktop"
     if not fn(ctypes.byref(source), desc, None, None, None, 1, ctypes.byref(result)):
         raise ctypes.WinError(ctypes.get_last_error())
     try:

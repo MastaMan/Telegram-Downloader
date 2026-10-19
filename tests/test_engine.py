@@ -84,12 +84,12 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.refresh()
         self.assertIsNone(self.engine.chat)
 
-    async def test_incremental_scan_filters_zip_and_resumes_cursor(self):
+    async def test_incremental_scan_filters_zip_and_rar_and_resumes_cursor(self):
         self.engine.chat = -100
         seen_min_ids = []
         def message(id, name, mime='application/octet-stream'):
             return SimpleNamespace(id=id, document=SimpleNamespace(id=900 + id, size=100, mime_type=mime), file=SimpleNamespace(name=name))
-        messages = [message(1, 'one.ZIP'), message(2, 'not.zip.exe'), message(3, 'two.zip')]
+        messages = [message(1, 'one.ZIP'), message(2, 'not.zip.exe'), message(3, 'two.zip'), message(4, 'pack.RAR'), message(5, None, 'application/vnd.rar'), message(6, 'pack.rar.exe')]
         async def iter_messages(entity, *, min_id, reverse):
             self.assertTrue(reverse)
             seen_min_ids.append(min_id)
@@ -99,10 +99,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.client = SimpleNamespace(iter_messages=iter_messages)
         await self.engine.scan()
         await self.engine.scan()
-        self.assertEqual(seen_min_ids, [0, 3])
+        self.assertEqual(seen_min_ids, [0, 6])
         jobs = self.engine.store.jobs(123, -100)
-        self.assertEqual([job['message'] for job in jobs], [1, 3])
+        self.assertEqual([job['message'] for job in jobs], [1, 3, 4, 5])
         self.assertNotEqual(jobs[0]['path'], jobs[1]['path'])
+        self.assertTrue(jobs[-1]['path'].endswith('.rar'))
 
     async def test_cancel_scan_keeps_checkpoint(self):
         self.engine.chat = -100

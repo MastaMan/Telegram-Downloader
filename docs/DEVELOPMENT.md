@@ -9,7 +9,8 @@
 | `tgzip/__main__.py` | Application lifecycle and single-instance lock |
 | `tgzip/ui.py` | PySide6 window, visual progress, credential and QR dialogs |
 | `tgzip/engine.py` | Dedicated asyncio worker, Telethon login, chat selection, scan/download orchestration |
-| `tgzip/transfer.py` | Chunked streaming, pause gate, cancellation, partial-file recovery, ZIP recognition, finalization |
+| `tgzip/transfer.py` | Chunked streaming, pause gate, cancellation, partial-file recovery, ZIP/RAR finalization |
+| `tgzip/archive_check.py` | WinRAR subprocess lifetime, password-free test policy, non-overwriting quarantine |
 | `tgzip/storage.py` | SQLite queue/checkpoints, atomic settings writes, filename filtering |
 | `tgzip/security.py` | Windows DPAPI vault and read-only legacy-session import |
 | `tests/` | Core, async orchestration, security and offscreen GUI tests |
@@ -22,7 +23,13 @@ Only one foreground operation runs at a time. Stop and chat switching cancel the
 
 Queue identity is `(account_id, chat_id, message_id)`. Document identity and expected size are checked before resuming. Paths also include the document ID. SQLite transactions atomically add a discovered file and advance the scan cursor. WAL and FULL synchronous mode are used for committed metadata. The partial file is the authority for resume offsets; metadata progress is for display. Session and preferences use temporary-file replacement.
 
-Downloads request 512 KB chunks. Resuming truncates only an incomplete trailing block. Network interruptions and expired references are retried with a fresh message fetch; Telegram FloodWait is honored. Archive recognition uses `zipfile.is_zipfile`, without extraction. Completed files are finalized in the same directory without intentionally overwriting an existing file.
+Downloads request 512 KB chunks. Resuming truncates only an incomplete trailing block. Network interruptions and expired references are retried with a fresh message fetch; Telegram FloodWait is honored. Transfer completion means the expected byte count was received. Format/integrity verification is a separate WinRAR operation and is never inferred from the filename or download byte count. Completed files are finalized in the same directory without intentionally overwriting an existing file.
+
+Verification state is separate from download state. A `done` download can be `pending`, `checking`, `ok`, `error`, `quarantining`, or `quarantined`. Canceling verification keeps the download complete. Missing WinRAR leaves it pending. Operational errors never qualify for quarantine; all three attempts must return 2, 3, or 11, and any success wins. Known `.partNN.rar` volumes are excluded from automatic checks because missing sibling volumes can produce misleading fatal errors.
+
+WinRAR runs through `asyncio.create_subprocess_exec`, without a shell, with output suppressed. Pause gates both attempts and result handling; Stop/close terminate and await the owned process, escalating to kill if needed. Each attempt has a 15-minute timeout. Files are tested without extraction or password prompts, using the command arguments from the supplied BAT. The intended quarantine path is committed before the synchronous, non-overwriting move; a subsequent snapshot reconciles a completed move whose final database commit was interrupted.
+
+Schema migration adds verification columns to existing queues and resets ZIP-only scan checkpoints exactly once (`user_version=1`). Existing jobs and paths are retained; INSERT OR IGNORE prevents historical rescans from replacing completed ZIPs. Interrupted checks become pending on reopen. The legacy module and Local AppData folder names remain unchanged.
 
 The authorization state uses Telethon `StringSession` in memory. Only a DPAPI-encrypted JSON payload is persisted. There is no plaintext credential fallback on unsupported platforms. This is not a secure enclave: secrets necessarily exist in process memory while the application runs.
 
@@ -66,6 +73,7 @@ The workflow runs on pushes to `main` and can also be started manually. It insta
 - [Telethon QRLogin](https://docs.telethon.dev/en/stable/modules/custom.html#telethon.tl.custom.qrlogin.QRLogin): code expiry and recreation.
 - [Telethon session documentation](https://docs.telethon.dev/en/stable/concepts/sessions.html): session persistence and authorization-key sensitivity.
 - [Microsoft CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata): user-scoped DPAPI protection.
+- [WinRAR exit codes](https://winrar.es/soporte/manual/HELPExitCodes): official distributor manual for success, archive errors, wrong passwords, and operational failures.
 - [Qt for Python](https://doc.qt.io/qtforpython-6/): desktop widgets and signals.
 
 The earlier conversation's downloadable Python attachments were not available through chat retrieval. No claim is made that their source code or queue format was preserved. Compatibility is provided for their described API configuration and standard Telethon SQLite authorization session.

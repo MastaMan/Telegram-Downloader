@@ -36,18 +36,25 @@ def load_settings(path):
 def safe_name(name):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name)
     name = name.strip(" .")
-    stem = name[:-4] if name.lower().endswith(".zip") else name
+    extension = archive_extension(name, None) or '.zip'
+    stem = name[:-4] if name.lower().endswith(extension) else name
     stem = stem[:85].rstrip(" .") or "archive"
     if stem.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
         stem = "_" + stem
-    return stem + ".zip"
+    return stem + extension
 
 
-def zip_candidate(name, mime):
-    # An explicit non-ZIP extension wins over unreliable MIME metadata.
+def archive_extension(name, mime):
+    """Select ZIP/RAR attachments; an explicit filename wins over MIME metadata."""
     if name:
-        return name.lower().endswith(".zip")
-    return mime in {"application/zip", "application/x-zip-compressed"}
+        return next((extension for extension in ('.zip', '.rar')
+                     if name.lower().endswith(extension)), None)
+    mime = (mime or '').split(';', 1)[0].strip().lower()
+    if mime in {'application/zip', 'application/x-zip-compressed'}:
+        return '.zip'
+    if mime in {'application/vnd.rar', 'application/x-rar-compressed', 'application/x-rar', 'application/rar'}:
+        return '.rar'
+    return None
 
 
 def resume_offset(path, expected):
@@ -73,8 +80,18 @@ class Store:
           account INTEGER, chat INTEGER, cursor INTEGER DEFAULT 0,
           PRIMARY KEY(account, chat));
         ''')
-        self.db.execute("UPDATE jobs SET state='queued' WHERE state='downloading'")
-        self.db.commit()
+        with self.db:
+            columns = {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}
+            for column, default in [('verification', 'pending'), ('verification_error', ''), ('quarantine_path', '')]:
+                if column not in columns:
+                    self.db.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT NOT NULL DEFAULT '{default}'")
+            if self.db.execute('PRAGMA user_version').fetchone()[0] < 1:
+                # Earlier versions skipped RAR attachments. Revisit history once,
+                # without discarding completed ZIPs, partial files or queued jobs.
+                self.db.execute('UPDATE scans SET cursor=0')
+                self.db.execute('PRAGMA user_version=1')
+            self.db.execute("UPDATE jobs SET state='queued' WHERE state='downloading'")
+            self.db.execute("UPDATE jobs SET verification='pending' WHERE verification='checking'")
 
     def cursor(self, account, chat):
         row = self.db.execute("SELECT cursor FROM scans WHERE account=? AND chat=?", (account, chat)).fetchone()
@@ -90,7 +107,7 @@ class Store:
                 DO UPDATE SET cursor=MAX(cursor,excluded.cursor)''', (account, chat, message))
 
     def update(self, account, chat, message, **values):
-        if not values.keys() <= {"done", "state", "error"}:
+        if not values.keys() <= {"done", "state", "error", "verification", "verification_error", "quarantine_path"}:
             raise ValueError("Invalid update")
         with self.db:
             self.db.execute("UPDATE jobs SET " + ",".join(f"{key}=?" for key in values) +
@@ -111,11 +128,25 @@ class Store:
                               (account, chat, after)).fetchone()
         return dict(row) if row else None
 
+    def next_check_job(self, account, chat, after=0):
+        row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND message>? AND state='done' AND verification!='quarantined' ORDER BY message LIMIT 1",
+                              (account, chat, after)).fetchone()
+        return dict(row) if row else None
+
+    def pending_quarantines(self, account, chat):
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM jobs WHERE account=? AND chat=? AND verification='quarantining'", (account, chat))]
+
     def summary(self, account, chat):
         row = self.db.execute('''SELECT COUNT(*) total, COALESCE(SUM(size),0) bytes,
             COALESCE(SUM(MIN(done,size)),0) received,
             COALESCE(SUM(state='done'),0) complete,
-            COALESCE(SUM(state='error'),0) failed FROM jobs WHERE account=? AND chat=?''', (account, chat)).fetchone()
+            COALESCE(SUM(state='error'),0) failed,
+            COALESCE(SUM(verification='quarantined'),0) quarantined,
+            COALESCE(SUM(verification='ok'),0) verified,
+            COALESCE(SUM(state='done' AND verification='pending'),0) unchecked,
+            COALESCE(SUM(verification='error'),0) check_failed
+            FROM jobs WHERE account=? AND chat=?''', (account, chat)).fetchone()
         return dict(row)
 
     def close(self):

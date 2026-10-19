@@ -208,9 +208,9 @@ class Window(QMainWindow):
         self.closing = False
         self.can_close = False
         self.last_progress = 0
-        self.setWindowTitle('Telegram ZIP Desktop' + (' — Preview' if demo else ''))
-        self.resize(1220, 850)
-        self.setMinimumSize(1050, 820)
+        self.setWindowTitle('Telegram Archive Desktop' + (' — Preview' if demo else ''))
+        self.resize(1280, 930)
+        self.setMinimumSize(1100, 880)
         self.setStyleSheet(STYLE)
         self.build_ui()
         self.timer = QTimer(self)
@@ -230,13 +230,13 @@ class Window(QMainWindow):
         page.setContentsMargins(28, 24, 28, 20)
         page.setSpacing(22)
         header = QHBoxLayout()
-        logo = label('TZ', 'logo')
+        logo = label('TA', 'logo')
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setFixedSize(52, 52)
         header.addWidget(logo)
         title_box = QVBoxLayout()
         title_box.setSpacing(3)
-        title_box.addWidget(label('Telegram ZIP Desktop', 'title'))
+        title_box.addWidget(label('Telegram Archive Desktop', 'title'))
         title_box.addWidget(label('Your archives. One organized workspace.', 'muted'))
         header.addLayout(title_box)
         header.addStretch()
@@ -300,7 +300,7 @@ class Window(QMainWindow):
         dest_layout.addWidget(self.open_btn)
         sidebar.addWidget(dest_card)
         sidebar.addStretch()
-        sidebar.addWidget(label('ZIP ONLY  ·  NO AUTO-EXTRACTION', 'muted'))
+        sidebar.addWidget(label('ZIP + RAR  ·  NO AUTO-EXTRACTION', 'muted'))
         body.addWidget(sidebar_widget)
         content = QVBoxLayout()
         content.setSpacing(16)
@@ -320,7 +320,7 @@ class Window(QMainWindow):
         self.file_bar.setTextVisible(False)
         current.addWidget(self.file_bar)
         byte_row = QHBoxLayout()
-        self.byte_label = label('Choose a chat → Scan ZIPs → Start', 'muted')
+        self.byte_label = label('Choose a chat → Scan archives → Start', 'muted')
         self.percent_label = label('0%', 'section')
         byte_row.addWidget(self.byte_label)
         byte_row.addStretch()
@@ -328,7 +328,7 @@ class Window(QMainWindow):
         current.addLayout(byte_row)
         metrics = QHBoxLayout()
         self.speed_value, self.eta_value, self.done_value = label('—', 'metric'), label('—', 'metric'), label('0 / 0', 'metric')
-        for caption, value in [('TRANSFER SPEED', self.speed_value), ('FILE TIME LEFT', self.eta_value), ('FILES COMPLETED', self.done_value)]:
+        for caption, value in [('TRANSFER SPEED', self.speed_value), ('FILE TIME LEFT', self.eta_value), ('FILES DOWNLOADED', self.done_value)]:
             column = QVBoxLayout()
             column.setSpacing(5)
             column.addWidget(label(caption, 'muted'))
@@ -336,13 +336,23 @@ class Window(QMainWindow):
             metrics.addLayout(column)
         current.addLayout(metrics)
         controls = QHBoxLayout()
-        self.scan_btn = button('Scan ZIPs', lambda: self.send('scan'))
+        self.scan_btn = button('Scan archives', lambda: self.send('scan'))
         self.start_btn = button('▶  Start', lambda: self.send('start'), True)
         self.pause_btn = button('Ⅱ  Pause', self.pause_resume)
         self.stop_btn = button('■  Stop', lambda: self.send('stop'))
         for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.stop_btn):
             controls.addWidget(btn)
         current.addLayout(controls)
+        checks = QHBoxLayout()
+        self.checker_label = label('WinRAR not configured', 'muted')
+        checks.addWidget(self.checker_label, 1)
+        self.checker_btn = button('WinRAR…', self.choose_checker)
+        self.checker_btn.setToolTip('Select the installed WinRAR.exe for automatic archive checks.')
+        self.verify_btn = button('Check archives', lambda: self.send('verify'))
+        self.verify_btn.setToolTip('Test downloaded files in this chat without a password. Confirmed failures move to wrong_archives.')
+        checks.addWidget(self.checker_btn)
+        checks.addWidget(self.verify_btn)
+        current.addLayout(checks)
         content.addWidget(current_card)
         queue_card, queue = card()
         queue_heading = QHBoxLayout()
@@ -368,7 +378,7 @@ class Window(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for index, width in [(1, 92), (2, 102), (3, 112)]:
+        for index, width in [(1, 92), (2, 102), (3, 126)]:
             self.table.setColumnWidth(index, width)
         self.table.setMinimumHeight(150)
         queue.addWidget(self.table, 1)
@@ -434,6 +444,11 @@ class Window(QMainWindow):
         if self.folder:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.folder))
 
+    def choose_checker(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Select installed WinRAR.exe', '', 'WinRAR (WinRAR.exe)')
+        if path:
+            self.send('checker', path=path)
+
     def pause_resume(self):
         self.send('resume' if self.state == 'paused' else 'pause')
 
@@ -442,7 +457,9 @@ class Window(QMainWindow):
         ready = bool(self.account and self.selected)
         self.scan_btn.setEnabled(ready and idle and bool(self.folder))
         self.start_btn.setEnabled(ready and idle)
-        self.pause_btn.setEnabled(self.state in {'downloading', 'scanning', 'paused'})
+        self.pause_btn.setEnabled(self.state in {'downloading', 'scanning', 'verifying', 'paused'})
+        self.checker_btn.setEnabled(idle)
+        self.verify_btn.setEnabled(ready and idle)
         self.pause_btn.setText('▶  Resume' if self.state == 'paused' else 'Ⅱ  Pause')
         self.stop_btn.setEnabled(not idle)
         self.connect_btn.setEnabled(idle and not self.account)
@@ -456,22 +473,29 @@ class Window(QMainWindow):
 
     def update_summary(self, summary):
         self.done_value.setText(f'{summary["complete"]} / {summary["total"]}')
-        self.queue_caption.setText(f'{summary["total"]:,} files · {summary["failed"]} failed')
+        self.queue_caption.setText(f'{summary["total"]:,} files · {summary["failed"]} failed · {summary.get("quarantined", 0)} quarantined')
         self.overall_bar.setValue(round(1000 * summary['received'] / max(1, summary['bytes'])))
-        self.total_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])} received · progress saved automatically')
+        self.total_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
 
     def on_event(self, name, value):
         if name == 'state':
             self.state = value
-            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'paused': 'Paused — progress saved'}
+            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             self.footer.setText(titles.get(value, value))
             if value in {'idle', 'paused'}:
                 self.on_event('speed_reset', None)
             if value == 'idle' and self.current_job:
                 row = self.queue_rows.get(self.current_job['message'])
-                if row is not None and self.table.item(row, 3).text() == 'Completed':
-                    self.file_status.setText('Completed')
+                if row is not None:
+                    self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'checker':
+            self.checker_label.setText('Automatic checks on' if value else 'WinRAR not configured')
+            self.checker_label.setToolTip(str(value) if value else 'Downloads remain Unchecked until WinRAR is configured. Install WinRAR and select WinRAR.exe.')
+        elif name == 'phase':
+            self.file_status.setText('Checking archive…')
+            self.footer.setText(value)
+            self.on_event('speed_reset', None)
         elif name == 'configured':
             self.configured = value
             if not value:
@@ -502,12 +526,14 @@ class Window(QMainWindow):
             self.chat_box.setToolTip(self.chat_box.currentText())
         elif name == 'current':
             self.current_job = value
+            if value and self.state == 'downloading':
+                self.file_status.setText('Downloading')
             self.file_name.setText(value['name'] if value else 'Your next archive starts here')
             self.file_name.setToolTip(value['path'] if value else '')
             if not value:
                 self.file_bar.setValue(0)
                 self.percent_label.setText('0%')
-                self.byte_label.setText('Choose a chat → Scan ZIPs → Start')
+                self.byte_label.setText('Choose a chat → Scan archives → Start')
                 self.on_event('speed_reset', None)
         elif name == 'progress':
             self.last_progress = time.monotonic()
@@ -530,14 +556,20 @@ class Window(QMainWindow):
             for index, row in enumerate(value['rows']):
                 self.queue_rows[row['message']] = index
                 status = {'queued': 'Queued', 'downloading': 'Downloading', 'done': 'Completed', 'error': 'Failed'}.get(row['state'], row['state'])
+                verification = row.get('verification', 'pending')
+                if row['state'] == 'done':
+                    status = {'pending': 'Unchecked', 'checking': 'Checking…', 'ok': 'Verified', 'error': 'Check failed',
+                              'quarantining': 'Moving…', 'quarantined': 'Quarantined'}.get(verification, 'Unchecked')
                 if row['state'] == 'downloading' and self.state == 'paused':
                     status = 'Paused'
                 texts = [row['name'], size_text(row['size']), f'{row["done"] / max(row["size"], 1):.0%}', status]
                 for col, text in enumerate(texts):
                     item = QTableWidgetItem(text)
-                    item.setToolTip(row['error'] or row['path'])
+                    item.setToolTip('\n'.join(filter(None, [row['error'], row.get('verification_error'), row.get('quarantine_path') or row['path']])))
                     self.table.setItem(index, col, item)
                 self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff'}.get(row['state'], '#a6b6cc')))
+                if row['state'] == 'done' and verification != 'ok':
+                    self.table.item(index, 3).setForeground(QColor('#ff9a9d' if verification in {'error', 'quarantined'} else '#e8c77f'))
             self.table.verticalScrollBar().setValue(scroll)
             self.update_summary(value['summary'])
             if self.current_job and self.state == 'idle':
@@ -547,7 +579,7 @@ class Window(QMainWindow):
             if value['summary']['total'] > 1000:
                 self.queue_caption.setText(self.queue_caption.text() + ' · first 1,000 shown')
         elif name == 'scan':
-            self.footer.setText(f'Scanning history · {value:,} new messages checked · ZIP files added automatically')
+            self.footer.setText(f'Scanning history · {value:,} new messages checked · ZIP and RAR files added automatically')
         elif name == 'qr':
             if value:
                 if self.qr_dialog is None:
@@ -607,21 +639,24 @@ class Window(QMainWindow):
         self.on_event('dialogs', [{'id': -100123, 'name': 'Design Resources', 'kind': 'Group'}, {'id': -100456, 'name': 'Archive Library', 'kind': 'Channel'}])
         self.on_event('selected', -100123)
         self.on_event('settings', {'download_dir': 'C:/Users/Alex/Downloads/Telegram Archives'})
+        self.on_event('checker', 'C:/Program Files/WinRAR/WinRAR.exe')
         rows = []
         for i, (name, size, done, state) in enumerate([
             ('Studio textures — collection 01.zip', 428, 428, 'done'),
             ('Architectural materials pack.zip', 820, 820, 'done'),
-            ('Environment assets — autumn.zip', 1240, 768.8, 'downloading'),
-            ('Lighting presets collection.zip', 156, 0, 'queued'),
+            ('Environment assets — autumn.rar', 1240, 768.8, 'downloading'),
+            ('Lighting presets collection.part01.rar', 156, 0, 'queued'),
             ('Reference photography — vol. 04.zip', 592, 0, 'queued')]):
-            rows.append({'message': i + 1, 'name': name, 'size': int(size * 1024**2), 'done': int(done * 1024**2), 'state': state, 'path': name, 'error': ''})
-        summary = {'total': 5, 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0}
+            rows.append({'message': i + 1, 'name': name, 'size': int(size * 1024**2), 'done': int(done * 1024**2), 'state': state, 'path': name, 'error': '',
+                         'verification': 'ok' if i == 0 else 'quarantined' if i == 1 else 'pending'})
+        summary = {'total': 5, 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 1}
         self.on_event('queue', {'rows': rows, 'summary': summary})
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')
+        self.log('Architectural materials pack.zip: password required; moved to wrong_archives after 3 checks.')
         self.log('Downloading archive 3 of 5. Partial files are saved automatically.')
         self.badge.setText('PREVIEW · SAMPLE DATA')
         self.footer.setText('Preview mode · Interface demonstration only · No real download is running')

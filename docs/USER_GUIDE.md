@@ -67,6 +67,8 @@ New files are organized as:
 ```text
 <chosen folder>\account_<account ID>\chat_<chat ID>\
     <message ID>_<document ID>_<safe original filename>.zip
+    <message ID>_<document ID>_<safe original filename>.rar
+    wrong_archives\    (files that failed three archive checks)
 ```
 
 The identifiers prevent collisions when two attachments have the same name. Windows-invalid filename characters are replaced, reserved names are handled, and long names are shortened. Keep the chosen folder path short enough for Windows path limits; `C:\TelegramFiles` is a good example.
@@ -77,11 +79,13 @@ Changing the folder applies to **newly discovered files**. Existing queue entrie
 
 ## 7. Scan and download
 
-**Scan ZIPs** reads message history from oldest to newest and saves matching ZIP documents to the queue. The first scan can take time in a large group. The footer shows the number of messages checked; the queue fills as files are found.
+**Scan archives** reads message history from oldest to newest and saves matching ZIP and RAR documents to the queue. The first scan can take time in a large group. The footer shows the number of messages checked; the queue fills as files are found.
 
-Only filenames ending in `.zip` are selected, case-insensitively. If a document has no filename, its MIME type must indicate ZIP. Files such as `.rar`, `.7z`, `.zip.exe`, and multipart `.z01` attachments are excluded. This app does not assemble split archives.
+Only filenames ending in `.zip` or `.rar` are selected, case-insensitively. If a document has no filename, its MIME type must indicate ZIP or RAR. An explicit filename takes precedence over MIME metadata: `.zip.exe`, `.rar.exe`, `.7z`, `.z01`, and legacy `.r00` files are excluded. Modern `.part01.rar` volumes are downloaded individually, but are not assembled or automatically verified. Restore original volume names and collect all parts before checking such a set manually in WinRAR.
 
-The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan ZIPs to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
+On the first launch after upgrading from the ZIP-only release, scan checkpoints reset once so the next **Scan archives** can discover older RAR files. Existing queue rows, partial files, and completed ZIPs stay intact. Subsequent scans resume incrementally as before.
+
+The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan archives to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
 
 Click **Start** after scanning to process the saved queue, one file at a time. Start also retries failed items once per queue pass. Completed items are skipped.
 
@@ -92,20 +96,38 @@ The interface shows:
 | Current download bar | Bytes saved for the current archive |
 | Transfer speed | Recent download rate; resets when paused or stalled |
 | File time left | Estimate for the current file, based on recent speed |
-| Files completed | Fully completed files divided by all discovered files |
+| Files downloaded | Full byte count received divided by all discovered files; includes quarantined files |
 | Green queue bar | Received bytes across the queue; a failed partial file can still contribute bytes |
-| Completed | Expected byte count received, ZIP recognized, and final filename created |
+| Unchecked | Download complete; no successful WinRAR test yet |
+| Checking… | WinRAR is testing the archive without a password |
+| Verified | WinRAR returned success |
+| Quarantined | Three confirmed failures; file moved to `wrong_archives` |
+| Check failed | Could not reliably test or move the file; hover for details |
 | Failed | Hover over the row and check Activity for the reason |
 
 The queue processes every saved entry. For responsiveness, the table displays the first 1,000 entries; totals include the full queue.
 
+### Password and integrity checks
+
+Install [WinRAR for Windows](https://www.win-rar.com/download.html). A standard installation is detected automatically. If the application shows **WinRAR not configured**, click **WinRAR…** and select the installed `WinRAR.exe`. Use the GUI executable, not `Rar.exe`: WinRAR detects content, including ZIP archives named `.rar`. This preference is saved. WinRAR is separate software with its own license; Python dependency setup does not install it.
+
+Every new complete download is automatically tested when WinRAR is available. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
+
+The policy follows the supplied BAT: run `WinRAR.exe t -p- -ibck -inul <archive>`, with up to three attempts and a three-second delay between attempts. Any success stops retrying. Only three results from codes **2** (fatal archive error), **3** (checksum error), and **11** (wrong/required password) qualify for quarantine. Any other result prevents quarantine, even if other attempts return an eligible code. This tests whether an archive can be read without a password; it does not guess, recover, save, or ask for archive passwords. Code 2 is a broad fatal-error category, so inspect quarantined files manually before discarding them.
+
+A qualifying file moves into **wrong_archives** beside its original location, within its chat directory. A unique suffix prevents overwriting another file with the same name. Hover over the row to see the reason and destination. Quarantined files remain recorded as downloaded and are skipped by Start and Check archives. You can inspect or recover them manually in Explorer; moving them back does not reset their saved status.
+
+A missing, changed, locked, or unreadable file is not deliberately overwritten. Checks that time out (15 minutes per attempt), fail to launch, or return operational errors leave it in place. A move failure is shown as **Check failed**, with paths retained for inspection. A saved move interrupted by process exit is reconciled when its chat queue is displayed again. Known `.partNN.rar` volumes get **Check failed** with an explanation instead of being classified as broken because other volumes are absent. Other split/archive naming schemes are not detected reliably.
+
+WinRAR's test checks archive integrity; **Verified** does not mean antivirus-scanned or safe to execute. The app never extracts archive contents.
+
 ## 8. Pause, resume, stop, and close
 
-**Pause** suspends a download or scan. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
+**Pause** suspends a download, scan, or archive-check queue. A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
 
-**Stop** cancels the active scan/download, including a pending network read or rate-limit wait. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan ZIPs to continue scanning.
+**Stop** cancels the active operation, including a pending network read, rate-limit wait, or this app's WinRAR process. An interrupted check remains Unchecked; retry it with Check archives. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan archives to continue scanning.
 
-Closing the main window disables controls, flushes the current partial file, saves queue/session state, disconnects Telethon, and waits for the worker to finish. The window closes after cleanup. Do not kill the process while this message is shown unless it is genuinely stuck.
+Closing the main window disables controls, stops any WinRAR process it started, flushes the current partial file, saves queue/session state, disconnects Telethon, and waits for the worker to finish. The window closes after cleanup. Do not kill the process while this message is shown unless it is genuinely stuck.
 
 After an ordinary restart, select nothing: the previous chat is restored. Press Start to resume. The actual `.part` file length determines the restart offset. An incomplete trailing block of up to 512 KB may be downloaded again to maintain alignment.
 
@@ -124,12 +146,12 @@ The original JSON and `.session` files remain unchanged and may contain sensitiv
 
 ## 10. Storage and privacy
 
-Application data is under `%LOCALAPPDATA%\TelegramZipDesktop`:
+Application data is under `%LOCALAPPDATA%\TelegramZipDesktop`. This original folder name is intentionally retained after the product title changed to Telegram Archive Desktop, so existing settings and credentials continue to work:
 
 | File | Contents |
 | --- | --- |
 | `credentials.dpapi` | Encrypted API ID, API Hash, and Telegram authorization session |
-| `settings.json` | Download folder and last selected chat per account; no API secret |
+| `settings.json` | Download folder, WinRAR path, and last selected chat per account; no API secret |
 | `queue.sqlite3` and its WAL/SHM files | Message/document identifiers, archive names, sizes, paths, scan checkpoints, and statuses |
 | `app.lock` | Prevents another copy from opening the same queue |
 
@@ -149,14 +171,16 @@ To remove the application, sign out first if possible, close it, then delete its
 | API credentials rejected | Re-enter the pair from your Telegram API application; a bot token is not an API Hash. |
 | QR login expires | The app refreshes it automatically. Verify phone connectivity and the Devices screen. |
 | Channel missing | Confirm account ID and access in the official app, then Refresh chats. |
-| No files found | Check that attachments really have `.zip` names, or a ZIP MIME type when nameless. Scan only processes messages newer than its saved checkpoint. |
+| No files found | Check that attachments have `.zip` / `.rar` names, or a matching MIME type when nameless. Scan only processes messages newer than its saved checkpoint. |
 | Telegram rate limit | Activity shows the required wait. Leave it running, or Stop and try later. |
 | Slow downloads | Speed depends on Telegram, your connection and account limits. One sequential download is intentional. |
 | Disk full or permission error | Free space or restore permission for the recorded path, then Start. Existing queue entries do not change paths when the base folder changes. |
-| Not a readable ZIP | The `.part` file is kept and the item is failed. Check the source attachment. ZIP structure recognition is not a CRC test or an antivirus scan. |
+| Unchecked | Install WinRAR, select WinRAR.exe with WinRAR…, then click Check archives. |
+| Check failed | Hover over the row. Check permissions, file existence, available memory, and WinRAR installation. Multipart sets require a manual test. |
+| Quarantined | Open the chat's wrong_archives folder. The file was retained after repeated password/archive errors. |
 | Existing destination differs | Move the conflicting file aside before retrying. The application does not overwrite it. |
-| Attachment changed or was deleted | The old partial is preserved; that queue item cannot be safely resumed. A fresh repost with a new message ID can be discovered by Scan ZIPs. |
+| Attachment changed or was deleted | The old partial is preserved; that queue item cannot be safely resumed. A fresh repost with a new message ID can be discovered by Scan archives. |
 
 ## 12. Known limits
 
-Windows is required for real account storage. Other operating systems can preview the GUI and run most tests using demo mode. A custom Telegram proxy configuration screen, continuous monitoring for new messages, bandwidth limiting, parallel file downloads, full ZIP CRC verification, old-history rescanning, and automatic recovery of deleted completed files are not included. First-run dependency installation and real Telegram account flows should be verified on your Windows machine before unattended use.
+Windows is required for real account storage. Other operating systems can preview the GUI and run most tests using demo mode. A custom Telegram proxy configuration screen, continuous monitoring for new messages, bandwidth limiting, parallel file downloads, password-protected archive extraction, automatic multipart assembly, general old-history rescanning, and automatic recovery of deleted completed files are not included. First-run dependency installation and real Telegram account flows should be verified on your Windows machine before unattended use.

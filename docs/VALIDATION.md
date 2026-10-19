@@ -1,5 +1,19 @@
 # Validation and release limits
 
+## RAR support and archive checking — 19 October 2026
+
+The update was tested on macOS with Python **3.15.0**, **3.14.8**, and **3.12.3**, using the pinned dependencies. **Each runtime ran 71 tests: 70 passed, 1 skipped, with exit code 0.** The skip is the Windows-only DPAPI test.
+
+New checks cover ZIP/RAR filtering and MIME fallback, exact-byte RAR resume, ZIP content with a RAR filename, original database schema migration, and the one-time historical rescan without discarding completed ZIPs. Synthetic RAR transfer bytes exercise transport and resumption, not the RAR decoder.
+
+Mocked WinRAR process results exercise immediate success, success after retry, three confirmed failures, mixed operational errors, timeouts, cancellation, and pause before result handling. The exact executable arguments are checked. A separate test starts and terminates a real Python child process to verify subprocess cleanup; this is not a real WinRAR test.
+
+Filesystem and engine tests exercise automatic checking after download completion, cancellation that preserves the completed file, quarantine moves, collision preservation, missing/changed files, missing WinRAR, multipart refusal, and recovery after a move but before its final database update. Qt checks cover verification statuses, controls, and clean worker shutdown. The updated screenshot was rendered by the real GUI with synthetic data and visually inspected.
+
+**WinRAR itself was not available in this macOS environment.** Its actual ZIP/RAR password behavior, process/UI behavior, installed-path discovery, and Windows move semantics still need the Windows acceptance check below. No real Telegram account was used. The Windows CI workflow exists but its result was not independently confirmed here.
+
+The earlier ZIP structure-only check was replaced by explicit verification states: expected download bytes can be complete while content remains Unchecked. WinRAR handles format and integrity tests when configured. The historical test results below describe their respective earlier releases.
+
 ## Python 3.14 / 3.15 update — 19 October 2026
 
 The final updated source was tested on macOS in separate environments with Python **3.15.0**, **3.14.8**, and **3.12.3**, using PySide6 Essentials / Shiboken6 **6.12.0** and all other pinned requirements.
@@ -46,11 +60,15 @@ The repository includes a GitHub Actions workflow for Windows x64 and Python 3.1
 
 1. Extract to a writable folder and double-click Start.bat. Verify setup completes and the app opens.
 2. Enter API credentials, scan the QR, and confirm the displayed account ID.
-3. Select a small private group/channel and a temporary download folder. Scan for ZIPs.
-4. Download a known ZIP, verify it opens, then pause/resume a larger ZIP.
+3. Select a small private group/channel and a temporary download folder. Click Scan archives and verify both ZIP and RAR attachments appear, including older RAR files after upgrading.
+4. Download known ZIP and RAR files, verify they open, then pause/resume a larger RAR.
 5. Close the window during that larger transfer. Reopen: the previous chat should be selected automatically; Start should resume from the partial file.
 6. Switch to a second chat during a transfer, then return. Verify both queues and the partial download are retained.
 7. Start the launcher twice and verify there is only one application instance.
 8. Confirm that Local AppData contains `credentials.dpapi` and no newly written plaintext Telethon `.session` or API-key JSON file.
+
+9. Install WinRAR or select WinRAR.exe. Download known unencrypted ZIP/RAR fixtures, an encrypted fixture, a deliberately damaged fixture, and a ZIP renamed to .rar. Confirm successful files are Verified and repeated eligible failures move to wrong_archives. Never use irreplaceable files for this acceptance check.
+10. Use Check archives on older downloaded queue items. Check missing WinRAR, a missing local file, and an operational access error: none should be moved. Confirm existing wrong_archives filenames are preserved.
+11. Pause a long archive check, then resume; Stop or close during another check. Confirm the app's WinRAR process exits and the downloaded file remains available for a later check. Restart and verify quarantined files are not downloaded again.
 
 No Windows executable or digital-signing certificate is included. The release consists of source, one Windows launcher, pinned dependency requirements, tests, and documentation.

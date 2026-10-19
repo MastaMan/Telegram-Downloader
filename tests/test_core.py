@@ -13,7 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from tgzip.security import Vault, _crypt, import_legacy_session, validate_keys
-from tgzip.storage import CHUNK, Store, atomic_write, load_settings, safe_name, zip_candidate
+from tgzip.storage import CHUNK, Store, atomic_write, load_settings, safe_name, archive_extension
 from tgzip.transfer import TransferError, download
 
 
@@ -120,12 +120,57 @@ class StorageTests(unittest.TestCase):
             self.assertNotRegex(result, r'[<>:"/\\|?*]')
         self.assertEqual(safe_name('CON.zip'), '_CON.zip')
 
-    def test_zip_only_filter(self):
-        self.assertTrue(zip_candidate('pack.ZIP', 'application/octet-stream'))
-        self.assertTrue(zip_candidate(None, 'application/zip'))
-        self.assertFalse(zip_candidate('pack.rar', 'application/zip'))
-        self.assertFalse(zip_candidate('pack.zip.exe', 'application/zip'))
-        self.assertFalse(zip_candidate(None, 'application/octet-stream'))
+    def test_zip_and_rar_filter(self):
+        for name, mime, expected in [
+            ('pack.ZIP', 'application/octet-stream', '.zip'),
+            (None, 'application/zip', '.zip'),
+            ('pack.RAR', 'application/zip', '.rar'),
+            ('pack.part01.rar', None, '.rar'),
+            (None, 'application/vnd.rar', '.rar'),
+            ('', 'application/x-rar-compressed; charset=binary', '.rar'),
+            ('pack.zip.exe', 'application/zip', None),
+            ('pack.rar.exe', 'application/vnd.rar', None),
+            ('pack.r00', 'application/vnd.rar', None),
+            (None, 'application/octet-stream', None),
+        ]:
+            with self.subTest(name=name, mime=mime):
+                self.assertEqual(archive_extension(name, mime), expected)
+        self.assertEqual(safe_name('CON.RAR'), '_CON.rar')
+        self.assertTrue(safe_name('a' * 500 + '.RAR').endswith('.rar'))
+
+    def test_upgrade_rescans_once_without_losing_files(self):
+        self.store.scanned(1, 10, 9, self.item())
+        self.store.update(1, 10, 9, state='done', done=200)
+        self.store.db.execute('PRAGMA user_version=0')
+        self.store.close()
+        self.store = Store(self.root / 'queue.db')
+        self.assertEqual(self.store.cursor(1, 10), 0)
+        self.assertEqual(self.store.jobs(1, 10)[0]['state'], 'done')
+        self.assertEqual(self.store.jobs(1, 10)[0]['verification'], 'pending')
+        self.store.scanned(1, 10, 12)
+        self.store.close()
+        self.store = Store(self.root / 'queue.db')
+        self.assertEqual(self.store.cursor(1, 10), 12)
+
+    def test_original_schema_migrates_and_adds_verification(self):
+        path = self.root / 'legacy.db'
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executescript("""
+                CREATE TABLE jobs(account INTEGER, chat INTEGER, message INTEGER, document TEXT,
+                  name TEXT, size INTEGER, path TEXT, done INTEGER DEFAULT 0,
+                  state TEXT DEFAULT 'queued', error TEXT DEFAULT '', PRIMARY KEY(account,chat,message));
+                CREATE TABLE scans(account INTEGER,chat INTEGER,cursor INTEGER,PRIMARY KEY(account,chat));
+                INSERT INTO jobs VALUES(1,10,5,'42','old.zip',200,'old.zip',200,'done','');
+                INSERT INTO scans VALUES(1,10,99);
+            """)
+        migrated = Store(path)
+        try:
+            self.assertEqual(migrated.cursor(1, 10), 0)
+            self.assertEqual(migrated.jobs(1, 10)[0]['verification'], 'pending')
+            self.assertIsNone(migrated.next_job(1, 10))
+            self.assertEqual(migrated.next_check_job(1, 10)['message'], 5)
+        finally:
+            migrated.close()
 
 
 class TransferTests(unittest.IsolatedAsyncioTestCase):
@@ -219,13 +264,30 @@ class TransferTests(unittest.IsolatedAsyncioTestCase):
             await self.run_download()
         self.assertEqual(self.target.read_bytes(), b'keep me')
 
-    async def test_invalid_zip_never_promoted_to_final_filename(self):
-        self.data = b'this is not a ZIP archive'
+    async def test_complete_corrupt_content_is_kept_for_separate_verification(self):
+        self.data = b'this is not an archive'
         self.job['size'] = len(self.data)
-        with self.assertRaises(TransferError):
-            await self.run_download()
-        self.assertTrue(self.part.exists())
-        self.assertFalse(self.target.exists())
+        await self.run_download()
+        self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertFalse(self.part.exists())
+
+    async def test_rar_resumes_exact_bytes_and_skips_completed_file(self):
+        self.target = self.root / 'archive.rar'
+        self.part = self.root / 'archive.rar.part'
+        self.data = b'Rar!\x1a\x07\x01\x00' + bytes(range(256)) * 6500
+        self.job = {'path': str(self.target), 'size': len(self.data)}
+        self.part.write_bytes(self.data[:CHUNK] + b'incomplete tail')
+        client = await self.run_download()
+        self.assertEqual(client.offsets, [CHUNK])
+        self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertFalse(self.part.exists())
+        self.assertEqual((await self.run_download()).streams, [])
+
+    async def test_zip_content_with_rar_name_is_not_rejected(self):
+        self.target = self.root / 'renamed.rar'
+        self.job['path'] = str(self.target)
+        await self.run_download()
+        self.assertEqual(self.target.read_bytes(), self.data)
 
     async def test_short_transfer_never_finalizes(self):
         self.job['size'] += 50

@@ -2,7 +2,6 @@
 import asyncio
 import os
 import time
-import zipfile
 from pathlib import Path
 from .storage import CHUNK, resume_offset
 
@@ -16,8 +15,11 @@ async def download(client, message, job, gate, progress):
     part = target.with_name(target.name + '.part')
     target.parent.mkdir(parents=True, exist_ok=True)
     expected = job['size']
+    extension = target.suffix.lower()
+    if extension not in {'.zip', '.rar'}:
+        raise TransferError('Only ZIP and RAR attachments are supported.')
     if target.exists():
-        if target.stat().st_size == expected and zipfile.is_zipfile(target):
+        if target.stat().st_size == expected:
             progress(expected, 0)
             return
         raise TransferError('Destination already exists with different or invalid contents. Move it away and retry.')
@@ -75,8 +77,8 @@ async def download(client, message, job, gate, progress):
                 await stream.close()
     if offset != expected:
         raise TransferError('Download ended early. Press Start to resume.')
-    if not zipfile.is_zipfile(part):
-        raise TransferError('This attachment is not a readable ZIP archive. The .part file was kept for inspection.')
+    # A complete download is checked separately by WinRAR, which detects the
+    # actual format (including ZIP content named .rar) and can quarantine damage.
     # Same-directory rename. Never silently overwrite an existing destination.
     if target.exists():
         raise TransferError('Destination appeared during download. Move it away and retry.')

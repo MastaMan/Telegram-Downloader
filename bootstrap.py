@@ -98,7 +98,7 @@ def setup_window():
     except Exception:
         print('Python tkinter is missing. Repair Python and enable Tcl/Tk support.')
         return 1
-    window.title('Telegram ZIP Desktop · First-time setup')
+    window.title('Telegram Archive Desktop · First-time setup')
     window.geometry('610x285')
     window.resizable(False, False)
     window.configure(bg='#101929')

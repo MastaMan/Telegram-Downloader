@@ -70,6 +70,22 @@ class UITests(unittest.TestCase):
         self.assertFalse(window.stop_btn.isEnabled())
         window.close()
 
+    def test_verification_states_are_distinct_from_download_progress(self):
+        window = Window(demo=True)
+        self.assertEqual(window.table.item(0, 3).text(), 'Verified')
+        self.assertEqual(window.table.item(1, 3).text(), 'Quarantined')
+        window.on_event('state', 'idle')
+        self.assertTrue(window.verify_btn.isEnabled())
+        window.on_event('checker', None)
+        self.assertIn('not configured', window.checker_label.text())
+        window.on_event('state', 'verifying')
+        self.assertTrue(window.pause_btn.isEnabled())
+        self.assertFalse(window.checker_btn.isEnabled())
+        window.on_event('phase', 'Checking archive without a password: attempt 2/3…')
+        self.assertIn('Checking', window.file_status.text())
+        self.assertIn('2/3', window.footer.text())
+        window.close()
+
     def test_qr_image_is_rendered_and_can_be_cancelled(self):
         window = Window(demo=True)
         cancelled = []

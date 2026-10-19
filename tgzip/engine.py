@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -7,8 +8,9 @@ from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
-from .storage import Store, atomic_write, load_settings, safe_name, zip_candidate
+from .storage import Store, atomic_write, load_settings, safe_name, archive_extension
 from .transfer import download, TransferError
+from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 
 
 def error_text(exc):
@@ -84,6 +86,8 @@ class Engine:
 
     def snapshot(self):
         if self.account and self.chat:
+            for job in self.store.pending_quarantines(self.account, self.chat):
+                self.recover_quarantine(job)
             self.emit('queue', {'rows': self.store.jobs(self.account, self.chat, limit=1000),
                                 'summary': self.store.summary(self.account, self.chat)})
         else:
@@ -124,7 +128,7 @@ class Engine:
                 self.password_future.set_result(args['value'])
             return
         if command == 'pause':
-            if self.kind in {'downloading', 'scanning'}:
+            if self.kind in {'downloading', 'scanning', 'verifying'}:
                 self.gate.clear()
                 self.emit('state', 'paused')
             return
@@ -136,6 +140,7 @@ class Engine:
         async with self.control:
             if command == 'boot':
                 self.emit('settings', self.settings)
+                self.emit('checker', self.checker())
                 self.secrets = self.vault.load()
                 self.emit('configured', bool(self.secrets.get('api_id')))
                 if self.secrets.get('api_id'):
@@ -180,6 +185,18 @@ class Engine:
             elif command == 'start':
                 if self.chat and self.account:
                     self.launch('downloading', self.download_queue)
+            elif command == 'checker':
+                if self.task and not self.task.done():
+                    raise TransferError('Stop the current operation before changing WinRAR.')
+                path = find_winrar(args['path'])
+                if not path:
+                    raise TransferError('Select the installed WinRAR.exe on Windows. Rar.exe is not supported.')
+                self.settings['winrar_path'] = str(path)
+                self.save_settings()
+                self.emit('checker', path)
+            elif command == 'verify':
+                if self.chat and self.account:
+                    self.launch('verifying', self.verify_queue)
             elif command == 'stop':
                 await self.cancel()
             elif command == 'logout':
@@ -224,7 +241,7 @@ class Engine:
         self.snapshot()
         self.client = TelegramClient(StringSession(self.secrets.get('session', '')),
                                      self.secrets['api_id'], self.secrets['api_hash'],
-                                     device_model='Telegram ZIP Desktop', system_version='Windows',
+                                     device_model='Telegram Archive Desktop', system_version='Windows',
                                      app_version='1.0.0', request_retries=2, connection_retries=3,
                                      retry_delay=2, timeout=15, flood_sleep_threshold=0)
         try:
@@ -289,13 +306,16 @@ class Engine:
             raise TransferError('Choose a download folder first.')
         root = Path(folder).resolve() / f'account_{account}' / f'chat_{chat}'
         cursor = self.store.cursor(account, chat)
+        if not cursor:
+            self.emit('log', 'Scanning full history for ZIP and RAR archives. Existing queue entries are preserved.')
         count, last = 0, 0
         async for message in self.client.iter_messages(self.dialogs[chat].input_entity, min_id=cursor, reverse=True):
             await self.gate.wait()
             item = None
             doc = message.document
-            if doc and message.file and zip_candidate(message.file.name, doc.mime_type):
-                name = safe_name(message.file.name or f'archive_{message.id}.zip')
+            extension = archive_extension(message.file.name, doc.mime_type) if doc and message.file else None
+            if extension:
+                name = safe_name(message.file.name or f'archive_{message.id}{extension}')
                 item = {'document': doc.id, 'name': name, 'size': doc.size,
                         'path': root / f'{message.id}_{doc.id}_{name}'}
             self.store.scanned(account, chat, message.id, item)
@@ -305,16 +325,21 @@ class Engine:
                 self.emit('scan', count)
                 self.snapshot()
                 last = now
-        self.emit('log', f'Scan complete: checked {count:,} new messages. ZIP queue saved.')
+        self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
 
     async def download_queue(self):
         account, chat = self.account, self.chat
+        executable = self.checker()
+        self.emit('checker', executable)
+        if not executable:
+            self.emit('log', 'WinRAR is not configured. Downloads will remain Unchecked. Select WinRAR… and use Check archives later.')
         after = 0
         while (job := self.store.next_job(account, chat, after)) is not None:
             await self.gate.wait()
             after = job['message']
             self.emit('current', job)
             self.store.update(account, chat, after, state='downloading', error='')
+            downloaded = False
             def progress(done, speed):
                 self.store.update(account, chat, job['message'], done=done)
                 self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
@@ -344,8 +369,11 @@ class Engine:
                         self.emit('speed_reset', None)
                         await asyncio.sleep(2 ** (attempt + 1))
                 self.store.update(account, chat, after, done=job['size'], state='done', error='')
+                downloaded = True
+                await self.verify_job(job)
             except asyncio.CancelledError:
-                self.store.update(account, chat, after, state='queued')
+                if not downloaded:
+                    self.store.update(account, chat, after, state='queued')
                 raise
             except Exception as exc:
                 reason = error_text(exc)
@@ -356,3 +384,76 @@ class Engine:
                     raise
             self.snapshot()
         self.emit('log', 'Queue pass complete. Failed files can be retried with Start.')
+
+    def checker(self):
+        return find_winrar(self.settings.get('winrar_path', ''))
+
+    def recover_quarantine(self, job):
+        path, destination = Path(job['path']), Path(job['quarantine_path'])
+        try:
+            if not path.exists() and not destination.is_symlink() and destination.is_file() and destination.stat().st_size == job['size']:
+                self.store.update(self.account, self.chat, job['message'], verification='quarantined')
+                return True
+        except OSError:
+            pass  # Keep the saved move plan for a later retry.
+        return False
+
+    async def verify_queue(self):
+        executable = self.checker()
+        self.emit('checker', executable)
+        if not executable:
+            raise TransferError('Install WinRAR for Windows, then select WinRAR… to locate WinRAR.exe. No archives were moved.')
+        after = 0
+        while (job := self.store.next_check_job(self.account, self.chat, after)) is not None:
+            await self.gate.wait()
+            after = job['message']
+            await self.verify_job(job)
+        self.emit('log', 'Archive check complete. See each file status and tooltip for the result.')
+
+    async def verify_job(self, job):
+        account, chat, message = self.account, self.chat, job['message']
+        path = Path(job['path'])
+        def update(**values):
+            self.store.update(account, chat, message, **values)
+        try:
+            # The destination is committed before moving. Recover a process exit
+            # between the filesystem move and the final database commit.
+            if job.get('verification') == 'quarantining':
+                if self.recover_quarantine(job):
+                    return
+            executable = self.checker()
+            if not executable:
+                update(verification='pending', verification_error='WinRAR is not configured. Select WinRAR… and use Check archives.')
+                return
+            if path.is_symlink() or not path.is_file() or path.stat().st_size != job['size']:
+                update(verification='error', verification_error='Local file is missing, changed, or a symbolic link. It was not moved.')
+                return
+            # Telegram filenames have unique prefixes; multipart sets cannot be
+            # tested reliably until the user restores names and gathers all parts.
+            if re.search(r'\.part\d+\.rar$', job['name'], re.IGNORECASE):
+                update(verification='error', verification_error='Multipart RAR: check the complete set manually in WinRAR. No files were moved.')
+                return
+            self.emit('current', job)
+            self.emit('progress', {'done': job['size'], 'size': job['size'], 'speed': 0,
+                                  'message': message, 'summary': self.store.summary(account, chat)})
+            update(verification='checking', verification_error='')
+            self.snapshot()
+            result = await check_archive(path, executable, self.gate, lambda text: self.emit('phase', text))
+            if result.status == 'bad':
+                destination = quarantine_destination(path)
+                update(verification='quarantining', quarantine_path=str(destination), verification_error=result.detail)
+                move_to_quarantine(path, destination)
+                update(verification='quarantined')
+                self.emit('log', f'{job["name"]}: moved to wrong_archives. {result.detail}')
+            else:
+                update(verification=result.status, verification_error='' if result.status == 'ok' else result.detail,
+                       quarantine_path='')
+                self.emit('log', f'{job["name"]}: {result.detail}')
+        except asyncio.CancelledError:
+            update(verification='pending', verification_error='Check interrupted. Use Check archives to retry.')
+            raise
+        except Exception as exc:
+            update(verification='error', verification_error=f'Archive check or move failed ({type(exc).__name__}). Inspect the original and quarantine paths before retrying.')
+            self.emit('log', f'File #{message}: archive check or move failed ({type(exc).__name__}).')
+        finally:
+            self.snapshot()
