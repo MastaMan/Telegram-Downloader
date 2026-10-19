@@ -16,12 +16,12 @@ QMainWindow { background: #0d1422; }
 QFrame#card { background: #151f30; border: 1px solid #253247; border-radius: 14px; }
 QFrame#card QLabel, QFrame#card QWidget#transparent { background: transparent; }
 QLabel#muted { color: #99abc3; }
-QLabel#title { font-size: 27px; font-weight: 700; }
+QLabel#title { font-size: 21px; font-weight: 700; }
 QLabel#section { font-size: 16px; font-weight: 600; }
-QLabel#metric { font-size: 25px; font-weight: 600; }
+QLabel#metric { font-size: 18px; font-weight: 600; }
 QLabel#badge { color: #69dcca; background: #153e3e; border-radius: 10px; padding: 6px 12px; }
 QLabel#logo { background: #4187ff; color: white; border-radius: 13px; font-size: 21px; font-weight: 800; }
-QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 8px; padding: 9px 12px; min-height: 18px; font-weight: 600; }
+QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 8px; padding: 8px 10px; min-height: 18px; font-weight: 600; }
 QPushButton:hover { background: #304460; border-color: #6a91c7; }
 QPushButton:pressed { background: #17243a; }
 QPushButton:disabled { color: #6d7b90; background: #172134; border-color: #263249; }
@@ -36,8 +36,8 @@ QProgressBar { background: #26334a; border: none; border-radius: 5px; min-height
 QProgressBar::chunk { background: #5c9aff; border-radius: 5px; }
 QProgressBar#overall::chunk { background: #48cbb5; }
 QTableWidget { background: #151f30; alternate-background-color: #182337; border: none; gridline-color: #263247; selection-background-color: #25446b; }
-QTableWidget::item { padding: 9px; border-bottom: 1px solid #253147; }
-QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 10px; border: none; font-weight: 600; }
+QTableWidget::item { padding: 5px; border-bottom: 1px solid #253147; }
+QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 7px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 8px; padding: 8px; color: #acbdd3; font-size: 12px; }
 QScrollBar:vertical { background: #131d2e; width: 9px; }
 QScrollBar::handle:vertical { background: #394b68; min-height: 24px; border-radius: 4px; }
@@ -81,8 +81,8 @@ def card():
     widget = QFrame()
     widget.setObjectName('card')
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(20, 19, 20, 19)
-    layout.setSpacing(12)
+    layout.setContentsMargins(14, 12, 14, 12)
+    layout.setSpacing(8)
     return widget, layout
 
 
@@ -210,9 +210,10 @@ class Window(QMainWindow):
         self.last_progress = 0
         self.checker_path = None
         self.verification_info = None
+        self.update_plan = None
         self.setWindowTitle('Telegram Archive Desktop' + (' — Preview' if demo else ''))
-        self.resize(1280, 930)
-        self.setMinimumSize(1100, 880)
+        self.resize(1220, 850)
+        self.setMinimumSize(1000, 680)
         self.setStyleSheet(STYLE)
         self.build_ui()
         self.timer = QTimer(self)
@@ -229,41 +230,42 @@ class Window(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         page = QVBoxLayout(root)
-        page.setContentsMargins(28, 24, 28, 20)
-        page.setSpacing(22)
+        page.setContentsMargins(16, 14, 16, 10)
+        page.setSpacing(10)
         header = QHBoxLayout()
         logo = label('TA', 'logo')
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setFixedSize(52, 52)
+        logo.setFixedSize(36, 36)
         header.addWidget(logo)
         title_box = QVBoxLayout()
         title_box.setSpacing(3)
         title_box.addWidget(label('Telegram Archive Desktop', 'title'))
-        title_box.addWidget(label('Your archives. One organized workspace.', 'muted'))
         header.addLayout(title_box)
         header.addStretch()
+        self.update_btn = button('Check updates', lambda: self.send('update'))
+        self.update_btn.setToolTip('Install the latest GitHub version and restart. Stop active operations first.')
+        header.addWidget(self.update_btn)
         self.badge = label('NOT CONNECTED', 'badge')
         header.addWidget(self.badge)
         page.addLayout(header)
         body = QHBoxLayout()
-        body.setSpacing(22)
+        body.setSpacing(12)
         sidebar = QVBoxLayout()
-        sidebar.setSpacing(16)
+        sidebar.setSpacing(10)
         sidebar_widget = QWidget()
         sidebar_widget.setLayout(sidebar)
-        sidebar_widget.setFixedWidth(285)
+        sidebar_widget.setFixedWidth(240)
         sidebar.setContentsMargins(0, 0, 0, 0)
         account_card, account_layout = card()
-        account_layout.addWidget(label('ACCOUNT', 'muted'))
         self.account_name = label('Connect Telegram', 'section')
         self.account_name.setWordWrap(True)
         account_layout.addWidget(self.account_name)
         self.account_detail = label('Sign in securely with a QR code.', 'muted')
         self.account_detail.setWordWrap(True)
-        self.account_detail.setMinimumHeight(36)
+        self.account_detail.setToolTip('Your Telegram session is encrypted and saved locally.')
         account_layout.addWidget(self.account_detail)
         account_actions = QHBoxLayout()
-        self.connect_btn = button('Connect account', self.connect_account, True)
+        self.connect_btn = button('Connect', self.connect_account, True)
         account_actions.addWidget(self.connect_btn)
         self.settings_btn = button('API settings', self.show_settings)
         self.logout_btn = button('Sign out', lambda: self.send('logout'))
@@ -272,7 +274,6 @@ class Window(QMainWindow):
         account_layout.addLayout(account_actions)
         sidebar.addWidget(account_card)
         source_card, source_layout = card()
-        source_layout.addWidget(label('SOURCE', 'muted'))
         source_layout.addWidget(label('Groups & channels', 'section'))
         self.chat_box = QComboBox()
         self.chat_box.setEditable(True)
@@ -284,9 +285,7 @@ class Window(QMainWindow):
         self.chat_box.completer().setFilterMode(Qt.MatchFlag.MatchContains)
         self.chat_box.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         source_layout.addWidget(self.chat_box)
-        hint = label('Your last selection is remembered.\nSwitch chats whenever you need.', 'muted')
-        hint.setWordWrap(True)
-        source_layout.addWidget(hint)
+        self.chat_box.setToolTip('Your last selection is remembered. Switch chats at any time.')
         self.refresh_btn = button('Refresh chats', lambda: self.send('refresh'))
         source_layout.addWidget(self.refresh_btn)
         sidebar.addWidget(source_card)
@@ -295,27 +294,25 @@ class Window(QMainWindow):
         self.folder_label = label('Choose a download folder', 'section')
         self.folder_label.setWordWrap(True)
         dest_layout.addWidget(self.folder_label)
-        dest_layout.addWidget(label('Each chat gets its own subfolder.', 'muted'))
-        self.folder_btn = button('Choose folder…', self.choose_folder)
-        dest_layout.addWidget(self.folder_btn)
-        self.open_btn = button('Open folder', self.open_folder)
-        dest_layout.addWidget(self.open_btn)
+        self.folder_btn = button('Choose…', self.choose_folder)
+        folder_actions = QHBoxLayout()
+        folder_actions.addWidget(self.folder_btn)
+        self.open_btn = button('Open', self.open_folder)
+        folder_actions.addWidget(self.open_btn)
+        dest_layout.addLayout(folder_actions)
         sidebar.addWidget(dest_card)
         sidebar.addStretch()
-        sidebar.addWidget(label('ZIP + RAR  ·  NO AUTO-EXTRACTION', 'muted'))
         body.addWidget(sidebar_widget)
         content = QVBoxLayout()
-        content.setSpacing(16)
+        content.setSpacing(10)
         current_card, current = card()
-        eyebrow = QHBoxLayout()
-        eyebrow.addWidget(label('CURRENT DOWNLOAD', 'muted'))
-        eyebrow.addStretch()
+        file_heading = QHBoxLayout()
+        self.file_name = label('No active download', 'section')
+        self.file_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        file_heading.addWidget(self.file_name, 1)
         self.file_status = label('Ready', 'muted')
-        eyebrow.addWidget(self.file_status)
-        current.addLayout(eyebrow)
-        self.file_name = label('Your next archive starts here', 'section')
-        self.file_name.setWordWrap(True)
-        current.addWidget(self.file_name)
+        file_heading.addWidget(self.file_status)
+        current.addLayout(file_heading)
         self.file_bar = QProgressBar()
         self.file_bar.setRange(0, 1000)
         self.file_bar.setValue(0)
@@ -330,9 +327,9 @@ class Window(QMainWindow):
         current.addLayout(byte_row)
         metrics = QHBoxLayout()
         self.speed_value, self.eta_value, self.done_value = label('—', 'metric'), label('—', 'metric'), label('0 / 0', 'metric')
-        for caption, value in [('TRANSFER SPEED', self.speed_value), ('FILE TIME LEFT', self.eta_value), ('FILES DOWNLOADED', self.done_value)]:
-            column = QVBoxLayout()
-            column.setSpacing(5)
+        for caption, value in [('Speed', self.speed_value), ('Time left', self.eta_value), ('Downloaded', self.done_value)]:
+            column = QHBoxLayout()
+            column.setSpacing(8)
             column.addWidget(label(caption, 'muted'))
             column.addWidget(value)
             metrics.addLayout(column)
@@ -369,12 +366,12 @@ class Window(QMainWindow):
         self.overall_bar.setValue(0)
         self.overall_bar.setTextVisible(False)
         queue.addWidget(self.overall_bar)
-        self.total_label = label('The queue and partial downloads are saved automatically.', 'muted')
+        self.total_label = label('No files queued', 'muted')
         queue.addWidget(self.total_label)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['ARCHIVE', 'SIZE', 'PROGRESS', 'STATUS'])
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(43)
+        self.table.verticalHeader().setDefaultSectionSize(32)
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -382,23 +379,26 @@ class Window(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index, width in [(1, 92), (2, 102), (3, 126)]:
             self.table.setColumnWidth(index, width)
-        self.table.setMinimumHeight(150)
+        self.table.setMinimumHeight(240)
         queue.addWidget(self.table, 1)
         content.addWidget(queue_card, 1)
         activity_header = QHBoxLayout()
-        activity_header.addWidget(label('Activity', 'section'))
+        self.activity_toggle = button('Activity', lambda: self.activity.setVisible(self.activity_toggle.isChecked()))
+        self.activity_toggle.setCheckable(True)
+        activity_header.addWidget(self.activity_toggle)
         activity_header.addStretch()
-        activity_header.addWidget(label('Local session log · no credentials', 'muted'))
         content.addLayout(activity_header)
         self.activity = QPlainTextEdit()
         self.activity.setReadOnly(True)
         self.activity.setMaximumBlockCount(500)
-        self.activity.setFixedHeight(87)
+        self.activity.setFixedHeight(72)
+        self.activity.hide()
         self.activity.setPlaceholderText('Connection, scan, and download updates will appear here.')
         content.addWidget(self.activity)
         body.addLayout(content, 1)
         page.addLayout(body, 1)
-        self.footer = label('Ready when you are. Downloads only start when you press Start.', 'muted')
+        self.footer = label('Ready', 'muted')
+        self.footer.setWordWrap(True)
         page.addWidget(self.footer)
 
     def boot(self):
@@ -467,6 +467,7 @@ class Window(QMainWindow):
         self.connect_btn.setEnabled(idle and not self.account)
         self.connect_btn.setVisible(not self.account)
         self.settings_btn.setEnabled(idle)
+        self.update_btn.setEnabled(idle)
         self.logout_btn.setEnabled(idle and bool(self.account))
         self.logout_btn.setVisible(bool(self.account))
         self.refresh_btn.setEnabled(idle and bool(self.account))
@@ -492,10 +493,12 @@ class Window(QMainWindow):
 
     def on_event(self, name, value):
         if name == 'state':
+            previous_state = self.state
             self.state = value
-            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'paused': 'Paused — progress saved'}
+            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
-            self.footer.setText(titles.get(value, value))
+            if not (previous_state == 'updating' and value == 'idle'):
+                self.footer.setText(titles.get(value, value))
             if value in {'idle', 'paused', 'verifying'}:
                 self.on_event('speed_reset', None)
             self.update_verification_indicator()
@@ -503,6 +506,12 @@ class Window(QMainWindow):
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'update_progress':
+            self.footer.setText(value)
+        elif name == 'update_ready':
+            self.update_plan = value
+            self.footer.setText('Update ready. Saving progress and restarting…')
+            self.close()
         elif name == 'checker':
             self.checker_path = value
             self.update_verification_indicator()
@@ -524,7 +533,7 @@ class Window(QMainWindow):
         elif name == 'account':
             self.account = value
             self.account_name.setText(value['name'] if value else 'Connect Telegram')
-            self.account_detail.setText(f'Account ID: {value["id"]}\nEncrypted session saved locally.' if value else 'Sign in securely with a QR code.')
+            self.account_detail.setText(f'ID: {value["id"]}' if value else 'Sign in securely with a QR code.')
             self.badge.setText('CONNECTED' if value else 'NOT CONNECTED')
         elif name == 'dialogs':
             self.selected = None
@@ -545,7 +554,7 @@ class Window(QMainWindow):
             self.current_job = value
             if value and self.state == 'downloading':
                 self.file_status.setText('Downloading')
-            self.file_name.setText(value['name'] if value else 'Your next archive starts here')
+            self.file_name.setText(value['name'] if value else 'No active download')
             self.file_name.setToolTip(value['path'] if value else '')
             if not value:
                 self.file_bar.setValue(0)
@@ -663,10 +672,17 @@ class Window(QMainWindow):
             ('Architectural materials pack.zip', 820, 820, 'done'),
             ('Environment assets — autumn.rar', 1240, 768.8, 'downloading'),
             ('Lighting presets collection.part01.rar', 156, 0, 'queued'),
-            ('Reference photography — vol. 04.zip', 592, 0, 'queued')]):
+            ('Reference photography — vol. 04.zip', 592, 0, 'queued'),
+            ('Concrete surfaces.rar', 318, 0, 'queued'),
+            ('Wood textures — 4K.zip', 760, 0, 'queued'),
+            ('Interior lighting references.zip', 96, 0, 'queued'),
+            ('Outdoor furniture pack.rar', 684, 0, 'queued'),
+            ('Studio HDR environments.zip', 512, 0, 'queued'),
+            ('Fabric collection.rar', 245, 0, 'queued'),
+            ('Landscape references.zip', 128, 0, 'queued')]):
             rows.append({'message': i + 1, 'name': name, 'size': int(size * 1024**2), 'done': int(done * 1024**2), 'state': state, 'path': name, 'error': '',
                          'verification': 'ok' if i == 0 else 'checking' if i == 1 else 'pending'})
-        summary = {'total': 5, 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 0}
+        summary = {'total': len(rows), 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 0}
         self.on_event('queue', {'rows': rows, 'summary': summary})
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
@@ -675,6 +691,6 @@ class Window(QMainWindow):
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')
         self.log('Checking Architectural materials pack.zip in the background. Downloads continue.')
-        self.log('Downloading archive 3 of 5. Partial files are saved automatically.')
+        self.log('Downloading archive 3 of 12. Partial files are saved automatically.')
         self.badge.setText('PREVIEW · SAMPLE DATA')
         self.footer.setText('Preview mode · Interface demonstration only · No real download is running')

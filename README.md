@@ -19,7 +19,8 @@ For a desktop shortcut, right-click `Start.bat` → **Show more options → Send
 
 ## What is included
 
-- Dark desktop interface with current-file and overall progress, transfer speed, estimated file time remaining, a persistent queue, and an activity panel.
+- Compact dark interface with a larger queue, current-file and overall progress, speed, time remaining, and a collapsible Activity log.
+- **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
 - Automatic background checks with installed WinRAR after each download, while the next file downloads, plus **Check archives** for previously downloaded files. Three confirmed password/archive failures move the file to `wrong_archives` without overwriting existing files.
@@ -38,6 +39,14 @@ Install [WinRAR for Windows](https://www.win-rar.com/download.html) to enable ar
 Checks follow the supplied `check_archives.bat` policy: test without a password, retry up to three times, and move only when all three results are codes 2, 3, or 11. Operational errors leave files in place. Files move to `wrong_archives` inside their existing chat download folder and are not downloaded again. One download and one archive check can run at the same time. If checking takes longer, completed files wait in a saved check queue. **Start** also resumes pending checks after a stop or restart. Pause, Stop, chat switching, and closing the window apply to both operations. The app finishes the remaining check queue after the last download. Use **Check archives** to recheck the current chat's previously downloaded files; hover over any status for details. This does not guess passwords or accept archive passwords.
 
 After updating, click **Scan archives** once in each saved chat to discover historical RAR attachments. Existing downloaded ZIPs, partial files, credentials, and selected chats are retained. The application data folder remains `%LOCALAPPDATA%\TelegramZipDesktop` for compatibility. Launching still uses only **Start.bat**.
+
+## Update the application
+
+Click **Check updates** in the header while no operation is running. The app checks the latest commit on this repository's `main`, downloads it in the background, saves its state, installs the update after closing, and restarts automatically. It uses the public GitHub API without a token. **Stop** cancels preparation before installation.
+
+ZIP installations receive a commit-pinned source archive; the app checks the package, backs up managed files, and restores them if replacement fails. Git installations require Git on PATH, a clean `main`, and fast-forward history; local source changes are never discarded. The restarted launcher installs changed Python dependencies if needed. See the user guide for recovery and limits.
+
+Versions released before this button was added need one manual update: download the latest repository ZIP (or pull `main`) and replace the application sources. Keep your `.venv`, application data, and downloads. Future versions can use the button.
 
 ## Documentation
 

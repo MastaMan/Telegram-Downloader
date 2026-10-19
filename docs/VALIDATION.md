@@ -1,5 +1,17 @@
 # Validation and release limits
 
+## Compact interface and automatic updates — 19 October 2026
+
+The update ran **102 tests per runtime: 101 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip is the Windows-only DPAPI test. The compact interface was rendered and visually inspected; the default window shows approximately 11 queue rows with Activity collapsed, compared with roughly four previously.
+
+Update tests cover ZIP preparation and installation, preservation of credentials/queue/download/venv fixture files, initial-version comparison, repeat checks, staged checksum changes, obsolete managed files, malformed ZIPs, Python syntax errors, unsafe/duplicate/symlink paths, disallowed redirects, download size limits, cancellation, and rollback after a simulated locked file. An interrupted-install journal is recovered on the next launcher check.
+
+A real helper subprocess waits for a fixture parent to exit, installs source files, and starts a fixture bootstrap process. A real temporary Git checkout is fast-forwarded while retaining an untracked download. Mocked Git checks cover dirty-source refusal; process tests cover cancellation cleanup. Engine tests cover background preparation cancellation and the UI restart request. A subprocess regression test verifies Python 3.15 asyncio thread usage after importing the app and Qt.
+
+The public GitHub commits endpoint was also contacted successfully without authentication. GitHub archive staging is tested with local ZIP fixtures; native Windows update handoff, locked-file behavior, WinRAR, live Telegram login, and dependency changes during a real Windows restart still require Windows acceptance testing. No claim is made that Windows CI has passed.
+
+For Windows acceptance, install this version manually once, then use Check updates after a newer main commit is published. Confirm that sources update, the application restarts, saved account/chat/queue remain available, changed requirements trigger normal setup, and the next check reports up to date. Also check an offline attempt, cancellation during preparation, and a locally edited Git checkout; these must not overwrite sources.
+
 ## Concurrent downloads and archive checks — 19 October 2026
 
 The updated source ran **78 tests per runtime: 77 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip remains the Windows-only DPAPI test.

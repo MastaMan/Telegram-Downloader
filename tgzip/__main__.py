@@ -48,6 +48,13 @@ def main():
         if bridge.thread.is_alive():
             bridge.send('close')
         bridge.thread.join()
+    if window.update_plan and not args.demo:
+        from updater import start_installer
+        try:
+            start_installer(window.update_plan)
+        except Exception as exc:
+            QMessageBox.critical(None, 'Update could not start',
+                                 f'Application files were not changed ({type(exc).__name__}). Run Start.bat and try Check updates again.')
     if lock:
         lock.unlock()
     # Destroy the widget tree while Python still owns the Window and QApplication.

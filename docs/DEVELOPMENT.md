@@ -5,6 +5,7 @@
 | File | Responsibility |
 | --- | --- |
 | `Start.bat` | The single Windows launch entry point |
+| `updater.py` | Public GitHub checks, staging, ZIP rollback, Git fast-forward, exit-wait helper and restart |
 | `bootstrap.py` | Standard-library environment check, setup window, dependency installation, app process launch |
 | `tgzip/__main__.py` | Application lifecycle and single-instance lock |
 | `tgzip/ui.py` | PySide6 window, visual progress, credential and QR dialogs |
@@ -32,6 +33,14 @@ WinRAR runs through `asyncio.create_subprocess_exec`, without a shell, with outp
 Schema migration adds verification columns to existing queues and resets ZIP-only scan checkpoints exactly once (`user_version=1`). Existing jobs and paths are retained; INSERT OR IGNORE prevents historical rescans from replacing completed ZIPs. Interrupted checks become pending on reopen. The legacy module and Local AppData folder names remain unchanged.
 
 The authorization state uses Telethon `StringSession` in memory. Only a DPAPI-encrypted JSON payload is persisted. There is no plaintext credential fallback on unsupported platforms. This is not a secure enclave: secrets necessarily exist in process memory while the application runs.
+
+## Updating and restarting
+
+The update command runs standard-library network and staging work in one explicit thread pool. Cancellation signals that worker and awaits cleanup before the engine can close. Package initialization eagerly resolves ThreadPoolExecutor before Qt import hooks load; a subprocess regression check covers a Python 3.15 lazy-import incompatibility observed during testing.
+
+The public commits API identifies a specific main SHA. ZIP installs fetch that SHA's archive with HTTPS redirects restricted to GitHub hosts, bounded compressed/uncompressed sizes, a managed-path allowlist, duplicate/symlink/traversal checks, and Python syntax validation. SHA-256 records detect local staging changes before replacement. Initial unversioned ZIP installs compare files; subsequent checks use the saved commit. Git checkouts instead fetch the commit and only permit a clean main fast-forward.
+
+The UI's update-ready event uses the normal close path. After the worker has stopped, the entry point launches a copied standard-library helper, records an in-progress marker while still holding the app lock, and exits. The helper waits for that PID, obtains the setup lock, applies the update, and restarts through bootstrap. ZIP installation journals the original files before replacement; rollback restores those files on write failure or the next launcher after interruption. Source replacement and dependency setup are separate steps; successful source installation is not rolled back for a later pip failure. Backups remain available under .updates.
 
 ## Run tests
 
@@ -74,6 +83,7 @@ The workflow runs on pushes to `main` and can also be started manually. It insta
 - [Telethon session documentation](https://docs.telethon.dev/en/stable/concepts/sessions.html): session persistence and authorization-key sensitivity.
 - [Microsoft CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata): user-scoped DPAPI protection.
 - [WinRAR exit codes](https://winrar.es/soporte/manual/HELPExitCodes): official distributor manual for success, archive errors, wrong passwords, and operational failures.
+- [GitHub commit API](https://docs.github.com/en/rest/commits/commits#get-a-commit) and [repository archive API](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-zip): public commit lookup and pinned ZIP downloads.
 - [Qt for Python](https://doc.qt.io/qtforpython-6/): desktop widgets and signals.
 
 The earlier conversation's downloadable Python attachments were not available through chat retrieval. No claim is made that their source code or queue format was preserved. Compatibility is provided for their described API configuration and standard Telethon SQLite authorization session.

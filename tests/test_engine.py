@@ -195,6 +195,27 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('correct fixture', str(engine.vault.saved))
         self.assertEqual(self.events[-1][0], 'qr')
 
+    async def test_update_preparation_is_background_and_cancel_waits_for_cleanup(self):
+        import threading
+        entered, stopped = threading.Event(), threading.Event()
+        def prepare(root, report, cancel):
+            entered.set()
+            cancel.wait(3)
+            stopped.set()
+            return None
+        with patch('tgzip.engine.prepare_update', prepare):
+            self.engine.launch('updating', self.engine.update_application)
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            await asyncio.wait_for(self.engine.cancel(), 1)
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(any(name == 'update_ready' for name, value in self.events))
+
+    async def test_prepared_update_requests_orderly_ui_restart(self):
+        with patch('tgzip.engine.prepare_update', return_value='prepared-plan.json'):
+            await self.engine.update_application()
+        self.assertIn(('update_ready', 'prepared-plan.json'), self.events)
+        self.assertFalse(self.engine.closing)
+
     async def test_error_messages_do_not_echo_exception_contents(self):
         self.assertNotIn('private-token', error_text(RuntimeError('private-token')))
 

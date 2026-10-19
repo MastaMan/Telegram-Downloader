@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import re
 import threading
@@ -11,13 +12,14 @@ from .security import Vault, validate_keys, import_legacy_session
 from .storage import Store, atomic_write, load_settings, safe_name, archive_extension
 from .transfer import download, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
+from updater import UpdateError, prepare_update, load_plan
 
 
 def error_text(exc):
     # Do not echo RPC request objects, credentials, QR tokens or arbitrary exception text.
     while isinstance(exc, BaseExceptionGroup):
         exc = exc.exceptions[0]
-    if isinstance(exc, TransferError):
+    if isinstance(exc, (TransferError, UpdateError)):
         return str(exc)
     if isinstance(exc, errors.PasswordHashInvalidError):
         return 'Incorrect two-step verification password. Try again.'
@@ -199,6 +201,8 @@ class Engine:
             elif command == 'verify':
                 if self.chat and self.account:
                     self.launch('verifying', self.verify_queue)
+            elif command == 'update':
+                self.launch('updating', self.update_application)
             elif command == 'stop':
                 await self.cancel()
             elif command == 'logout':
@@ -230,6 +234,28 @@ class Engine:
         if self.client and self.client.session.auth_key:
             self.secrets['session'] = self.client.session.save()
             self.vault.save(self.secrets)
+
+    async def update_application(self):
+        cancel = threading.Event()
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='Application update') as executor:
+            operation = asyncio.get_running_loop().run_in_executor(
+                executor, prepare_update, Path(__file__).resolve().parents[1],
+                lambda text: self.emit('update_progress', text), cancel)
+            try:
+                plan = await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                cancel.set()
+                result = await asyncio.gather(operation, return_exceptions=True)
+                if isinstance(result[0], str):
+                    import shutil
+                    _, stage, _ = load_plan(result[0])
+                    shutil.rmtree(stage, ignore_errors=True)
+                raise
+        if plan:
+            self.emit('update_ready', plan)
+        else:
+            self.emit('log', 'You are up to date.')
+            self.emit('update_progress', 'You are up to date.')
 
     async def connect(self):
         if not self.secrets.get('api_id'):

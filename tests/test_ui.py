@@ -38,7 +38,9 @@ class UITests(unittest.TestCase):
         window = Window(demo=True)
         window.show()
         self.app.processEvents()
-        self.assertEqual(window.table.rowCount(), 5)
+        self.assertEqual(window.table.rowCount(), 12)
+        self.assertFalse(window.activity.isVisible())
+        self.assertGreaterEqual(window.table.viewport().height() // 32, 9)
         self.assertEqual(window.file_bar.value(), 620)
         self.assertIn('18.6', window.speed_value.text())
         self.assertTrue(window.chat_box.isEnabled())
@@ -102,6 +104,18 @@ class UITests(unittest.TestCase):
         self.assertIn('Checking', window.checker_label.text())
         window.on_event('verification', None)
         self.assertEqual(window.checker_label.text(), 'Automatic checks on')
+        window.close()
+
+    def test_update_control_and_result_survive_idle_transition(self):
+        window = Window(demo=True)
+        self.assertFalse(window.update_btn.isEnabled())
+        window.on_event('state', 'idle')
+        self.assertTrue(window.update_btn.isEnabled())
+        window.on_event('state', 'updating')
+        self.assertFalse(window.update_btn.isEnabled())
+        window.on_event('update_progress', 'You are up to date.')
+        window.on_event('state', 'idle')
+        self.assertEqual(window.footer.text(), 'You are up to date.')
         window.close()
 
     def test_qr_image_is_rendered_and_can_be_cancelled(self):

@@ -62,6 +62,12 @@ class BootstrapTests(unittest.TestCase):
                      patch.object(bootstrap.subprocess, 'run', side_effect=error):
                     self.assertFalse(bootstrap.check_environment())
 
+    def test_python315_qt_import_order_keeps_asyncio_threads_working(self):
+        result = subprocess.run([sys.executable, '-c',
+            'import tgzip; from PySide6.QtCore import QObject; import asyncio; asyncio.run(asyncio.to_thread(lambda: None))'],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_installed_pinned_dependencies_load_in_a_subprocess(self):
         with patch.object(bootstrap, 'PYTHON', Path(sys.executable)):
             self.assertTrue(bootstrap.check_environment())

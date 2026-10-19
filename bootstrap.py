@@ -54,6 +54,9 @@ import PySide6.QtWidgets, telethon, qrcode
 
 
 def launch():
+    from updater import startup_ready
+    if not startup_ready(ROOT):
+        return
     interpreter = PYTHONW if os.name == 'nt' and PYTHONW.exists() else PYTHON
     with open(ROOT / 'startup.log', 'a', encoding='utf-8') as log:
         subprocess.Popen([str(interpreter), '-m', 'tgzip', *sys.argv[1:]], cwd=ROOT,
@@ -66,6 +69,10 @@ def main():
         print(problem)
         return 1
     if '--check-python' in sys.argv[1:]:
+        return 0
+    from updater import startup_ready
+    if not startup_ready(ROOT):
+        print('An update is being installed. The application will restart automatically.')
         return 0
     # Serialize first-run setup across repeated double-clicks.
     lock = open(ROOT / '.setup.lock', 'a+b')
@@ -83,7 +90,8 @@ def main():
             return 0
     try:
         if check_environment():
-            launch()
+            if startup_ready(ROOT):
+                launch()
             return 0
         return setup_window()
     finally:

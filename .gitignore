@@ -9,3 +9,6 @@ telegram_config.json
 settings.json
 *.log
 .setup.lock
+.updates/
+.installed-update.json*
+.update-pending.json*

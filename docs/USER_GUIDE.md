@@ -60,7 +60,7 @@ If a private group is missing, check that it opens in Telegram under the same ac
 
 ## 6. Choose where archives are saved
 
-Click **Choose folder…** and select a local folder with enough free space. The location is remembered.
+Click **Choose…** under SAVE TO and select a local folder with enough free space. The location is remembered.
 
 New files are organized as:
 
@@ -73,7 +73,7 @@ New files are organized as:
 
 The identifiers prevent collisions when two attachments have the same name. Windows-invalid filename characters are replaced, reserved names are handled, and long names are shortened. Keep the chosen folder path short enough for Windows path limits; `C:\TelegramFiles` is a good example.
 
-**Open folder** opens the currently selected base folder in Explorer. Hover over a queue row to see that file's full path, or its error if it has failed.
+**Open** opens the currently selected base folder in Explorer. Hover over a queue row to see that file's full path, or its error if it has failed.
 
 Changing the folder applies to **newly discovered files**. Existing queue entries retain their original paths, so incomplete downloads can still resume safely. Do not move `.part` files while downloading.
 
@@ -88,6 +88,8 @@ On the first launch after upgrading from the ZIP-only release, scan checkpoints 
 The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan archives to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
 
 Click **Start** after scanning to process the saved queue, one file at a time. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
+
+The compact interface gives most of the window to the queue. **Activity** expands or collapses the session log; it is collapsed by default. Extra explanations are available in tooltips.
 
 The interface shows:
 
@@ -188,3 +190,24 @@ To remove the application, sign out first if possible, close it, then delete its
 ## 12. Known limits
 
 Windows is required for real account storage. Other operating systems can preview the GUI and run most tests using demo mode. A custom Telegram proxy configuration screen, continuous monitoring for new messages, bandwidth limiting, parallel file downloads, password-protected archive extraction, automatic multipart assembly, general old-history rescanning, and automatic recovery of deleted completed files are not included. First-run dependency installation and real Telegram account flows should be verified on your Windows machine before unattended use.
+
+## 13. Check updates
+
+**Check updates** is in the top-right header. Stop or finish the active download, scan, or archive check first; the button is available when idle and does not require Telegram sign-in.
+
+1. Click Check updates. The footer shows checking and download progress. If the installed version matches GitHub, it shows **You are up to date**.
+2. If a newer version is available, preparation runs in the background. Stop or close cancels preparation and waits for its cleanup. Network requests have timeouts; cancellation may briefly wait for a request to return.
+3. Once the package is ready, the application saves its queue and session, disconnects, and closes. A separate updater waits for the process to exit before changing application files. No extra confirmation or second launcher is needed.
+4. The updater restarts through `bootstrap.py`, which checks the environment and installs changed pinned dependencies if required. Your saved account and last chat reconnect normally. Press Start when you want to resume downloads/checks; an update does not start them automatically.
+
+The update source is the latest commit on `MastaMan/Telegram-Downloader`'s public **main** branch, not GitHub Releases or prerelease tags. No GitHub account, token, or administrator rights are needed for a writable ZIP installation. GitHub rate limits, internet outages, insufficient space, locked files, or folder permissions can prevent an update; the application reports this instead of treating it as an up-to-date result.
+
+For an extracted ZIP installation, the app downloads a commit-pinned archive, rejects unsafe paths and symbolic links, verifies staged checksums before installation, and checks Python syntax with your current interpreter. It only replaces managed source, launcher, test, and documentation files. It does not replace `.venv`, Local AppData, Telegram credentials, queue databases, `Archive.zip`, or downloaded archives. Obsolete files are removed only if a previous update recorded them as managed.
+
+Backups and recovery journals are saved in `.updates`. File replacement errors trigger rollback. If the updater is interrupted during replacement, the next Start.bat launch uses the journal to restore the old files before opening the app. Do not remove `.updates` or `.update-pending.json` while an update or recovery is pending. After a successful update, old `.updates` folders may be removed while the app is closed if you no longer need those backups. `.installed-update.json` records the installed commit and managed files; keep it for future updates.
+
+For a Git checkout, Git must be available on PATH, the branch must be **main**, and tracked source files must be clean. The updater fetches the selected commit and fast-forwards to it; it does not reset local commits or discard source edits. It checks again before installation in case the checkout changed during preparation. Untracked files are kept; conflicting files cause Git to refuse the update. Preserve local changes or resolve divergent history manually before retrying. Git history retains the previous version; ZIP-style file rollback is not used for Git checkouts.
+
+If restart fails, run Start.bat again and inspect `update.log`, `setup.log`, and `startup.log`. Source updates do not install a newer Python interpreter. Changed package requirements may need internet access during restart; dependency installation failure is reported by the normal setup window and does not automatically revert the already-installed source update.
+
+The first version containing Check updates must be installed manually over older versions that have no update button. Download the latest repository ZIP or pull main, then use the same Start.bat.
