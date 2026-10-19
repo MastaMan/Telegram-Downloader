@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -279,7 +280,7 @@ class SecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'telegram_zip_session.session'
             key = bytes(range(256))
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute('CREATE TABLE sessions(dc_id INTEGER, server_address TEXT, port INTEGER, auth_key BLOB)')
                 db.execute('INSERT INTO sessions VALUES(2, ?, 443, ?)', ('149.154.167.51', key))
             before = path.read_bytes()

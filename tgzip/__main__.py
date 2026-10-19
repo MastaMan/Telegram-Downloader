@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from PySide6.QtCore import QLockFile, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
+from shiboken6 import delete
 from .ui import Window
 
 
@@ -49,6 +50,9 @@ def main():
         bridge.thread.join()
     if lock:
         lock.unlock()
+    # Destroy the widget tree while Python still owns the Window and QApplication.
+    # Leaving signal/closure cycles to interpreter teardown can crash Shiboken.
+    delete(window)
     return result
 
 

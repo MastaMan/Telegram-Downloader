@@ -1,6 +1,18 @@
 # Validation and release limits
 
-## Local validation — 19 October 2026
+## Python 3.14 / 3.15 update — 19 October 2026
+
+The final updated source was tested on macOS in separate environments with Python **3.15.0**, **3.14.8**, and **3.12.3**, using PySide6 Essentials / Shiboken6 **6.12.0** and all other pinned requirements.
+
+**Each interpreter ran 49 tests: 48 passed, 1 skipped; each process exited with code 0.** The skipped check is real Windows DPAPI. These are local macOS results, not Windows CI or real-account Telegram results.
+
+Added coverage includes supported-version and build checks, a side-effect-free launcher probe, broken environment handling, imports of the pinned dependencies in a subprocess, initialization of a real offline Telethon client on a running asyncio loop, and a separate demo process that renders a PNG and exits normally.
+
+The update also explicitly closes the read-only legacy-session database and destroys Qt widgets before interpreter teardown. This resolved an unclosed SQLite connection warning and a Qt cleanup crash exposed during the compatibility test run. The final Python 3.15 demo image was visually inspected.
+
+The newest supported stable release was verified against [Python 3.15.0](https://www.python.org/downloads/release/python-3150/); the Qt package's Python range and wheels were checked in [PySide6 Essentials 6.12.0 metadata](https://pypi.org/project/PySide6-Essentials/6.12.0/). Standard 64-bit CPython 3.11–3.15 is accepted. Free-threaded builds and prereleases are not supported.
+
+## Original local validation — 19 October 2026
 
 Environment: macOS, Python 3.12.3, Telethon 1.45.0, PySide6 Essentials 6.10.1, qrcode 8.2. The pinned requirements were installed into an isolated environment for testing.
 
@@ -21,7 +33,7 @@ The interface was rendered with synthetic sample data, visually inspected, and a
 
 ## Windows checks
 
-The repository includes a GitHub Actions workflow for Windows x64 and Python 3.11, 3.12, and 3.13. It runs the tests, including actual DPAPI encryption/decryption and tamper detection, and produces a Windows GUI screenshot. The presence of this workflow is **not** a claim that its run has already passed. Consult the repository's Actions page for current run results.
+The repository includes a GitHub Actions workflow for Windows x64 and Python 3.11–3.15. It runs the tests, including actual DPAPI encryption/decryption and tamper detection, checks the launcher's interpreter probe, and produces a Windows GUI screenshot. The presence of this workflow is **not** a claim that its run has already passed. Consult the repository's Actions page for current run results.
 
 ## Not verified with a real Windows desktop / Telegram account
 

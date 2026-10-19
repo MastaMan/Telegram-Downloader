@@ -41,6 +41,14 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.store.close()
         self.temp.cleanup()
 
+    async def test_real_telethon_client_initializes_on_running_loop(self):
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        client = TelegramClient(StringSession(), 123, 'a' * 32)
+        self.assertIs(client.loop, asyncio.get_running_loop())
+        self.assertFalse(client.is_connected())
+        await client.disconnect()
+
     async def test_switch_chat_cancels_active_work_and_saves_selection(self):
         self.engine.chat = -100
         stopped = asyncio.Event()

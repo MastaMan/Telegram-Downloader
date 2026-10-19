@@ -2,7 +2,7 @@
 
 ## 1. System requirements
 
-- Windows 10 or 11, x64, with 64-bit Python 3.11–3.13. Python 3.12 is recommended.
+- Windows 10 or 11, x64, with 64-bit Python 3.11–3.15. Standard CPython 3.15 is recommended; free-threaded builds and pre-releases are not supported.
 - Python's standard Tcl/Tk component, used for the first-time setup window.
 - An internet connection, access to Telegram, and enough space for the dependencies and downloaded archives. Allow roughly 1 GB for setup, in addition to your downloads.
 - A Telegram account already authorized in the official mobile app and already able to open the required group or channel.
@@ -14,7 +14,11 @@ The application is independent of 3ds Max. It runs as a normal desktop program.
 
 Extract **all files** into a writable directory, such as `C:\TelegramDownloader`. Avoid very long paths. Double-click **Start.bat** every time you want to open the app.
 
-The launcher first looks for Python 3.12, then 3.13, then 3.11 using the Windows Python launcher. It falls back to `python` on PATH. An unsupported or 32-bit interpreter produces an explanatory error. If Python is missing, the official Windows download page opens; install Python and run Start.bat again.
+The launcher checks installed Python versions from newest to oldest: 3.15, 3.14, 3.13, 3.12, then 3.11. It skips unsupported builds using the Windows Python launcher. It falls back to `python` on PATH. An unsupported or 32-bit interpreter produces an explanatory error. If Python is missing, the official Windows download page opens; install Python and run Start.bat again.
+
+Use standard 64-bit CPython. Alpha/beta/RC versions and free-threaded builds are not supported by this application. The launcher checks interpreter compatibility before choosing a version.
+
+When updating from the original release, keep your application data and downloaded files. Run Start.bat to update the GUI dependencies automatically. An existing supported `.venv` can continue using its original Python version. To move that environment specifically to Python 3.15, close the app, install Python 3.15, remove only the project's `.venv` directory, and run Start.bat again. Do the same if the old Python installation was removed. Credentials and the queue remain in Local AppData, outside `.venv`.
 
 On first launch, a setup window creates `.venv`, checks dependencies, and installs the required pinned versions. No administrator rights are required. Later launches check the environment and normally go straight to the application. A console window may briefly appear while Start.bat prepares the launch.
 

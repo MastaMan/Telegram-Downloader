@@ -31,13 +31,15 @@ The authorization state uses Telethon `StringSession` in memory. Only a DPAPI-en
 From a terminal in the project directory:
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.15 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:QT_QPA_PLATFORM = "offscreen"
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-On macOS/Linux, create a virtual environment with Python 3.11–3.13, install the same requirements, and run the same unittest command using that environment's Python. The real Windows DPAPI test is skipped there; the non-Windows refusal test is skipped on Windows.
+On macOS/Linux, create a virtual environment with Python 3.11–3.15, install the same requirements, and run the same unittest command using that environment's Python. The real Windows DPAPI test is skipped there; the non-Windows refusal test is skipped on Windows.
+
+The GUI dependencies are pinned to PySide6 Essentials / Shiboken6 6.12.0, whose package metadata supports standard CPython through 3.15. The launcher's `--check-python` probe validates version, architecture, release stability and build type without installing packages or opening a window. When checking an existing environment, it also validates that interpreter and imports the pinned dependencies in a subprocess.
 
 ## Preview without an account
 
@@ -56,7 +58,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 
 ## Windows CI
 
-The workflow runs on pushes to `main` and can also be started manually. It installs the pinned requirements on Windows x64 with Python 3.11, 3.12, and 3.13; runs syntax and unittest checks, including actual DPAPI round-trip/tamper tests; and uploads a rendered demo screenshot. It does not use Telegram credentials or exercise real-account networking.
+The workflow runs on pushes to `main` and can also be started manually. It installs the pinned requirements on Windows x64 with Python 3.11–3.15; runs syntax and unittest checks, including actual DPAPI round-trip/tamper tests; and uploads a rendered demo screenshot. It does not use Telegram credentials or exercise real-account networking.
 
 ## API references
 

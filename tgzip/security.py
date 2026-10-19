@@ -1,5 +1,6 @@
 """Windows user-scoped DPAPI. No plaintext fallback, including on other OSes."""
 import ctypes
+from contextlib import closing
 import json
 import os
 import re
@@ -62,7 +63,7 @@ def import_legacy_session(path):
     from telethon.sessions import StringSession
     from telethon.crypto import AuthKey
     uri = Path(path).resolve().as_uri() + "?mode=ro"
-    with sqlite3.connect(uri, uri=True) as db:
+    with closing(sqlite3.connect(uri, uri=True)) as db:
         row = db.execute("SELECT dc_id, server_address, port, auth_key FROM sessions LIMIT 1").fetchone()
     if not row or not row[3] or len(row[3]) != 256:
         raise ValueError("This file does not contain a valid authorized Telethon session.")

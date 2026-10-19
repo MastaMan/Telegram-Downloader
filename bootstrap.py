@@ -4,6 +4,7 @@ import os
 import queue
 import subprocess
 import sys
+import sysconfig
 import threading
 import venv
 from pathlib import Path
@@ -15,18 +16,40 @@ PYTHONW = ENV / 'Scripts/pythonw.exe'
 FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 
 
+def runtime_error():
+    """The Qt abi3 wheels require a standard, 64-bit CPython build."""
+    import struct
+    if sys.implementation.name != 'cpython':
+        return 'Please use standard CPython from python.org.'
+    if not (3, 11) <= sys.version_info[:2] <= (3, 15):
+        return 'Please install Python 3.15 (64-bit). Supported Python versions: 3.11-3.15.'
+    if sys.version_info.releaselevel != 'final':
+        return 'Please use a stable Python release, not an alpha, beta, or release candidate.'
+    if struct.calcsize('P') != 8:
+        return 'A 64-bit Python installation is required.'
+    if sysconfig.get_config_var('Py_GIL_DISABLED'):
+        return 'Please use standard Python, not the free-threaded build.'
+    return None
+
+
 def check_environment():
     if not PYTHON.exists():
         return False
     code = '''import importlib.metadata as m
+from bootstrap import runtime_error
 from pathlib import Path
+if runtime_error():
+    raise SystemExit(1)
 for line in Path('requirements.txt').read_text().splitlines():
     if line and not line.startswith('#'):
         name, version = line.split('==')
         assert m.version(name) == version
 import PySide6.QtWidgets, telethon, qrcode
 '''
-    result = subprocess.run([str(PYTHON), '-c', code], cwd=ROOT, capture_output=True, creationflags=FLAGS)
+    try:
+        result = subprocess.run([str(PYTHON), '-c', code], cwd=ROOT, capture_output=True, creationflags=FLAGS, timeout=45)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return result.returncode == 0
 
 
@@ -38,13 +61,12 @@ def launch():
 
 
 def main():
-    if not (3, 11) <= sys.version_info[:2] <= (3, 13):
-        print('Please install Python 3.12 (64-bit). Supported Python versions: 3.11–3.13.')
+    problem = runtime_error()
+    if problem:
+        print(problem)
         return 1
-    import struct
-    if struct.calcsize('P') != 8:
-        print('A 64-bit Python installation is required.')
-        return 1
+    if '--check-python' in sys.argv[1:]:
+        return 0
     # Serialize first-run setup across repeated double-clicks.
     lock = open(ROOT / '.setup.lock', 'a+b')
     lock.seek(0)

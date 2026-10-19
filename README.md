@@ -6,7 +6,7 @@ A standalone Windows application for downloading ZIP attachments from Telegram g
 
 ## Start here
 
-1. Install **Python 3.12, 64-bit**, from [python.org](https://www.python.org/downloads/windows/). Keep the Python launcher and Tcl/Tk options enabled. Enable **Add python.exe to PATH**. Python 3.11–3.13 is supported.
+1. Install **Python 3.15, 64-bit**, from [python.org](https://www.python.org/downloads/windows/). Keep the Python launcher and Tcl/Tk options enabled. Enable **Add python.exe to PATH**. Python 3.11–3.15 is supported.
 2. Extract the entire project into a writable folder, for example `C:\TelegramDownloader`. Do not run directly inside a ZIP or place it in `Program Files`.
 3. Double-click **`Start.bat`**. This is the only launch file you need. First-time setup checks and installs pinned dependencies into a private `.venv`. It opens the application automatically when ready.
 4. Open **API settings**, enter your API ID and API Hash, then click **Save**. Get them from [Telegram API development tools](https://my.telegram.org/apps).
@@ -28,7 +28,7 @@ For a desktop shortcut, right-click `Start.bat` → **Show more options → Send
 - API credentials **and the Telegram authorization session** encrypted with Windows DPAPI. No plaintext session file is written by the application.
 - Optional import of the old `telegram_config.json` and `telegram_zip_session.session`.
 - One running instance per Windows user; orderly worker shutdown when the window closes.
-- Automated tests and a Windows GitHub Actions workflow for Python 3.11, 3.12 and 3.13.
+- Automated tests and a Windows GitHub Actions workflow for Python 3.11–3.15.
 
 ## Documentation
 

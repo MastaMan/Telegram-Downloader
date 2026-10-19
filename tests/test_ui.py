@@ -4,9 +4,12 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from pathlib import Path
 import tempfile
 import time
+import subprocess
+import sys
 import unittest
 from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QPushButton
+from shiboken6 import delete, isValid
 from tgzip.engine import Bridge
 from tgzip.ui import QRDialog, SettingsDialog, Window
 
@@ -24,6 +27,13 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(predicate())
 
+    def tearDown(self):
+        # Keep wrappers alive while Qt destroys their children and connected slots.
+        windows = self.app.topLevelWidgets()
+        for window in windows:
+            if isValid(window):
+                delete(window)
+
     def test_demo_renders_and_controls_are_readable(self):
         window = Window(demo=True)
         window.show()
@@ -38,6 +48,16 @@ class UITests(unittest.TestCase):
                 self.assertGreaterEqual(btn.height(), 36, btn.text())
         self.assertFalse(window.grab().isNull())
         window.close()
+
+    def test_demo_process_renders_and_exits_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            screenshot = Path(directory) / 'preview.png'
+            result = subprocess.run(
+                [sys.executable, '-m', 'tgzip', '--demo', '--screenshot', str(screenshot)],
+                cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(screenshot.exists())
+            self.assertGreater(screenshot.stat().st_size, 1000)
 
     def test_progress_states_and_chat_switch_availability(self):
         window = Window(demo=True)
