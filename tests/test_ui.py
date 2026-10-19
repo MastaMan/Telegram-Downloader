@@ -1,0 +1,102 @@
+"""Offscreen Qt checks. No Telegram connection or actual credentials are required."""
+import os
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from PySide6.QtCore import QLockFile
+from PySide6.QtWidgets import QApplication, QPushButton
+from tgzip.engine import Bridge
+from tgzip.ui import QRDialog, SettingsDialog, Window
+
+
+class UITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def events_until(self, predicate, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(.005)
+        self.app.processEvents()
+        self.assertTrue(predicate())
+
+    def test_demo_renders_and_controls_are_readable(self):
+        window = Window(demo=True)
+        window.show()
+        self.app.processEvents()
+        self.assertEqual(window.table.rowCount(), 5)
+        self.assertEqual(window.file_bar.value(), 620)
+        self.assertIn('18.6', window.speed_value.text())
+        self.assertTrue(window.chat_box.isEnabled())
+        self.assertFalse(window.start_btn.isEnabled())
+        for btn in window.findChildren(QPushButton):
+            if btn.isVisible():
+                self.assertGreaterEqual(btn.height(), 36, btn.text())
+        self.assertFalse(window.grab().isNull())
+        window.close()
+
+    def test_progress_states_and_chat_switch_availability(self):
+        window = Window(demo=True)
+        window.on_event('state', 'paused')
+        self.assertIn('Resume', window.pause_btn.text())
+        self.assertTrue(window.chat_box.isEnabled())
+        self.assertEqual(window.speed_value.text(), '—')
+        window.on_event('state', 'idle')
+        self.assertTrue(window.start_btn.isEnabled())
+        self.assertFalse(window.stop_btn.isEnabled())
+        window.close()
+
+    def test_qr_image_is_rendered_and_can_be_cancelled(self):
+        window = Window(demo=True)
+        cancelled = []
+        dialog = QRDialog(window, lambda: cancelled.append(True))
+        dialog.set_url('tg://login?token=synthetic-test-token')
+        self.assertFalse(dialog.picture.pixmap().isNull())
+        self.assertGreater(dialog.picture.pixmap().width(), 200)
+        dialog.reject()
+        self.assertEqual(cancelled, [True])
+        window.close()
+
+    def test_api_settings_validate_before_accepting(self):
+        window = Window(demo=True)
+        dialog = SettingsDialog(window)
+        dialog.api_id.setText('invalid')
+        dialog.api_hash.setText('wrong')
+        dialog.validate()
+        self.assertIn('positive API ID', dialog.error.text())
+        self.assertEqual(dialog.result(), 0)
+        dialog.reject()
+        window.close()
+
+    def test_single_instance_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = str(Path(directory) / 'app.lock')
+            first, second = QLockFile(lock_path), QLockFile(lock_path)
+            self.assertTrue(first.tryLock(0))
+            self.assertFalse(second.tryLock(0))
+            first.unlock()
+            self.assertTrue(second.tryLock(0))
+            second.unlock()
+
+    def test_real_background_worker_closes_without_thread_leak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Bridge(directory)
+            self.events_until(lambda: bridge.ready.is_set())
+            window = Window(bridge)
+            window.show()
+            self.events_until(lambda: window.isVisible())
+            # Let startup boot complete before asking the worker to shut down.
+            deadline = time.monotonic() + .12
+            self.events_until(lambda: time.monotonic() >= deadline)
+            window.close()
+            self.events_until(lambda: not bridge.thread.is_alive())
+            self.events_until(lambda: window.can_close and not window.isVisible())
+            bridge.thread.join(timeout=1)
+
+
+if __name__ == '__main__':
+    unittest.main()
