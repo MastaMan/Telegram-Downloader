@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.session*
+*.dpapi*
+*.sqlite3*
+*.part
+telegram_config.json
+settings.json
+*.log
+.setup.lock
