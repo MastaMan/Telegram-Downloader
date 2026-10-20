@@ -74,6 +74,7 @@ def resume_offset(path, expected):
 
 class Store:
     def __init__(self, path):
+        self.progress_pending = {}
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -115,13 +116,36 @@ class Store:
             self.db.execute('''INSERT INTO scans VALUES (?,?,?) ON CONFLICT(account,chat)
                 DO UPDATE SET cursor=MAX(cursor,excluded.cursor)''', (account, chat, message))
 
+    def stage_progress(self, account, chat, message, done):
+        key = (account, chat, message)
+        if key not in self.progress_pending:
+            row = self.db.execute('SELECT done,size FROM jobs WHERE account=? AND chat=? AND message=?', key).fetchone()
+            if row is None:
+                raise ValueError('Unknown download')
+            self.progress_pending[key] = [row['done'], row['size'], done]
+        else:
+            self.progress_pending[key][2] = done
+
+    def flush_progress(self):
+        if not self.progress_pending:
+            return
+        # One durable transaction for all active transfers, not one per callback.
+        with self.db:
+            self.db.executemany('UPDATE jobs SET done=? WHERE account=? AND chat=? AND message=?',
+                                [(value[2], *key) for key, value in self.progress_pending.items()])
+        self.progress_pending.clear()
+
     def update(self, account, chat, message, **values):
         if not values.keys() <= {"done", "state", "error", "verification", "verification_error", "quarantine_path"}:
             raise ValueError("Invalid update")
+        key = (account, chat, message)
+        if key in self.progress_pending:
+            values.setdefault('done', self.progress_pending[key][2])
         with self.db:
             self.db.execute("UPDATE jobs SET " + ",".join(f"{key}=?" for key in values) +
                             " WHERE account=? AND chat=? AND message=?",
                             (*values.values(), account, chat, message))
+        self.progress_pending.pop(key, None)
 
     def jobs(self, account, chat, pending=False, limit=None):
         query = "SELECT * FROM jobs WHERE account=? AND chat=?"
@@ -130,7 +154,12 @@ class Store:
         query += " ORDER BY message"
         if limit is not None:
             query += f" LIMIT {int(limit)}"
-        return [dict(row) for row in self.db.execute(query, (account, chat))]
+        rows = [dict(row) for row in self.db.execute(query, (account, chat))]
+        for row in rows:
+            pending = self.progress_pending.get((account, chat, row['message']))
+            if pending is not None:
+                row['done'] = pending[2]
+        return rows
 
     def next_job(self, account, chat, after=0):
         row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND message>? AND state!='done' ORDER BY message LIMIT 1",
@@ -161,7 +190,14 @@ class Store:
             COALESCE(SUM(state='done' AND verification='pending'),0) unchecked,
             COALESCE(SUM(verification='error'),0) check_failed
             FROM jobs WHERE account=? AND chat=?''', (account, chat)).fetchone()
-        return dict(row)
+        result = dict(row)
+        result['received'] += sum(min(done, size) - min(saved, size)
+                                  for (a, c, _), (saved, size, done) in self.progress_pending.items()
+                                  if (a, c) == (account, chat))
+        return result
 
     def close(self):
-        self.db.close()
+        try:
+            self.flush_progress()
+        finally:
+            self.db.close()

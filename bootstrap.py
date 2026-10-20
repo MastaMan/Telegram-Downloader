@@ -32,18 +32,36 @@ def runtime_error():
     return None
 
 
+def required_packages(text):
+    for line in text.splitlines():
+        if not line or line.startswith('#'):
+            continue
+        requirement, _, marker = line.partition(';')
+        if marker:
+            if marker.strip() != 'python_version < "3.15"':
+                raise ValueError('Unsupported requirement marker')
+            if sys.version_info[:2] >= (3, 15):
+                continue
+        name, version = requirement.strip().split('==')
+        yield name, version
+
+
 def check_environment():
     if not PYTHON.exists():
         return False
     code = '''import importlib.metadata as m
-from bootstrap import runtime_error
+from bootstrap import runtime_error, required_packages
 from pathlib import Path
 if runtime_error():
     raise SystemExit(1)
-for line in Path('requirements.txt').read_text().splitlines():
-    if line and not line.startswith('#'):
-        name, version = line.split('==')
-        assert m.version(name) == version
+for name, version in required_packages(Path('requirements.txt').read_text()):
+    assert m.version(name) == version
+    if name == 'cryptg':
+        import cryptg
+        from telethon.crypto import aes
+        assert aes.cryptg is cryptg
+        data, key, iv = bytes(32), bytes(32), bytes(32)
+        assert cryptg.decrypt_ige(cryptg.encrypt_ige(data, key, iv), key, iv) == data
 import PySide6.QtWidgets, telethon, qrcode
 '''
     try:
@@ -130,7 +148,7 @@ def setup_window():
                 venv.EnvBuilder(with_pip=True).create(ENV)
             events.put(('status', 'Downloading and installing application libraries…'))
             with open(ROOT / 'setup.log', 'w', encoding='utf-8') as log:
-                completed = subprocess.run([str(PYTHON), '-m', 'pip', 'install', '--disable-pip-version-check',
+                completed = subprocess.run([str(PYTHON), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=cryptg',
                                              '-r', str(ROOT / 'requirements.txt')], cwd=ROOT,
                                             stdout=log, stderr=subprocess.STDOUT, creationflags=FLAGS)
             if completed.returncode or not check_environment():

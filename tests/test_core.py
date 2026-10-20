@@ -103,6 +103,63 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.store.jobs(1, 10)[0]['state'], 'queued')
         self.assertEqual(self.store.jobs(1, 10)[0]['done'], 128)
 
+    def test_buffered_progress_is_visible_but_commits_as_one_batch(self):
+        for message in (1, 2):
+            self.store.scanned(1, 10, message, self.item())
+        self.store.scanned(2, 10, 1, self.item())
+        self.store.update(1, 10, 1, done=80)
+        statements = []
+        self.store.db.set_trace_callback(statements.append)
+        # Correcting an unaligned resume offset may decrease displayed progress.
+        self.store.stage_progress(1, 10, 1, 40)
+        for done in range(1, 101):
+            self.store.stage_progress(1, 10, 2, done)
+        self.store.stage_progress(2, 10, 1, 15)
+        self.assertEqual(self.store.summary(1, 10)['received'], 140)
+        self.assertEqual(self.store.summary(2, 10)['received'], 15)
+        self.assertEqual([row['done'] for row in self.store.jobs(1, 10)], [40, 100])
+        self.assertFalse(any(sql.startswith(('UPDATE', 'BEGIN', 'COMMIT')) for sql in statements))
+        self.store.flush_progress()
+        self.assertEqual(sum(sql == 'COMMIT' for sql in statements), 1)
+        self.assertEqual(self.store.summary(1, 10)['received'], 140)
+        self.assertFalse(self.store.progress_pending)
+
+    def test_state_changes_and_close_commit_latest_progress(self):
+        for message in (1, 2):
+            self.store.scanned(1, 10, message, self.item())
+        self.store.stage_progress(1, 10, 1, 150)
+        self.store.update(1, 10, 1, state='done', done=200)
+        self.assertEqual(self.store.db.execute('SELECT done FROM jobs WHERE message=1').fetchone()[0], 200)
+        self.store.stage_progress(1, 10, 2, 72)
+        self.store.update(1, 10, 2, state='queued')
+        self.assertEqual(self.store.db.execute('SELECT done FROM jobs WHERE message=2').fetchone()[0], 72)
+        self.store.stage_progress(1, 10, 2, 96)
+        self.store.close()
+        self.store = Store(self.root / 'queue.db')
+        self.assertEqual(self.store.summary(1, 10)['received'], 296)
+
+    def test_failed_checkpoint_rolls_back_whole_batch_and_retains_pending_data(self):
+        for message in (1, 2):
+            self.store.scanned(1, 10, message, self.item())
+            self.store.stage_progress(1, 10, message, 80)
+        self.store.db.execute("""CREATE TRIGGER reject_progress BEFORE UPDATE ON jobs
+            WHEN NEW.message=2 BEGIN SELECT RAISE(ABORT, 'fixture failure'); END""")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.flush_progress()
+        self.assertEqual([row[0] for row in self.store.db.execute('SELECT done FROM jobs')], [0, 0])
+        self.assertEqual(len(self.store.progress_pending), 2)
+        self.store.db.execute('DROP TRIGGER reject_progress')
+        self.store.flush_progress()
+        self.assertEqual(self.store.summary(1, 10)['received'], 160)
+
+    def test_close_releases_database_even_if_final_checkpoint_fails(self):
+        with patch.object(self.store, 'flush_progress', side_effect=OSError('fixture disk error')):
+            with self.assertRaises(OSError):
+                self.store.close()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            self.store.db.execute('SELECT 1')
+        self.store = Store(self.root / 'queue.db')
+
     def test_saved_chat_and_settings_survive(self):
         path = self.root / 'settings.json'
         original = {'selected_chats': {'123': -100001}, 'download_dir': 'C:/Archives'}

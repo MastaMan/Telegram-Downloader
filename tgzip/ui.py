@@ -619,7 +619,8 @@ class Window(QMainWindow):
                 self.table.item(row, 2).setText(f'{percent:.0%}')
                 self.table.item(row, 3).setText('Paused' if self.state == 'paused' else 'Downloading')
                 self.table.item(row, 3).setForeground(QColor('#78adff'))
-            self.update_summary(value['summary'])
+            if 'summary' in value:
+                self.update_summary(value['summary'])
         elif name == 'queue':
             scroll = self.table.verticalScrollBar().value()
             self.table.setRowCount(len(value['rows']))

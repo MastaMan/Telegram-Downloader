@@ -184,6 +184,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 first = [await asyncio.wait_for(started.get(), 2) for _ in range(20)]
                 self.assertEqual(first, list(range(1, 21)))
                 self.assertTrue(started.empty())
+                # Combined metrics refresh on their own timer, not per-file callbacks.
+                await asyncio.sleep(.3)
                 aggregate = [value for name, value in self.events if name == 'transfers'][-1]
                 self.assertEqual(aggregate['active'], 20)
                 self.assertEqual(aggregate['speed'], 2000)
@@ -252,6 +254,38 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.engine.store.summary(123, -100)['complete'], 3)
         for number in range(1, 4):
             self.assertEqual((self.root / f'{number}.zip').stat().st_size, CHUNK * 2)
+
+    async def test_progress_burst_avoids_sql_writes_and_periodically_checkpoints(self):
+        self.queue_files(1, 1000)
+        entered, checkpointed = asyncio.Event(), asyncio.Event()
+        statements = []
+        original_flush = self.engine.store.flush_progress
+        def flush():
+            pending = bool(self.engine.store.progress_pending)
+            original_flush()
+            if pending:
+                checkpointed.set()
+        async def transfer(client, message, job, gate, progress):
+            statements.clear()
+            with patch.object(self.engine.store, 'summary', wraps=self.engine.store.summary) as summary:
+                for done in range(1, 801):
+                    progress(done, 200)
+                self.assertEqual(summary.call_count, 0)
+            self.assertFalse(any(sql.startswith(('UPDATE', 'BEGIN', 'COMMIT')) for sql in statements))
+            entered.set()
+            await asyncio.Event().wait()
+        self.engine.store.db.set_trace_callback(statements.append)
+        with patch.object(self.engine, 'checker', return_value=None), \
+             patch('tgzip.engine.download', transfer), \
+             patch.object(self.engine.store, 'flush_progress', side_effect=flush):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(checkpointed.wait(), 2)
+            self.assertEqual(self.engine.store.db.execute('SELECT done FROM jobs').fetchone()[0], 800)
+            self.assertEqual(sum(sql == 'COMMIT' for sql in statements), 1)
+            await self.engine.cancel()
+        self.assertEqual(self.engine.store.jobs(123, -100)[0]['done'], 800)
+        self.assertFalse(self.engine.store.progress_pending)
 
     async def test_parallel_failure_does_not_retry_forever_or_block_other_files(self):
         from tgzip.transfer import TransferError

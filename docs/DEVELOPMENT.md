@@ -87,3 +87,9 @@ The workflow runs on pushes to `main` and can also be started manually. It insta
 - [Qt for Python](https://doc.qt.io/qtforpython-6/): desktop widgets and signals.
 
 The earlier conversation's downloadable Python attachments were not available through chat retrieval. No claim is made that their source code or queue format was preserved. Compatibility is provided for their described API configuration and standard Telethon SQLite authorization session.
+
+## Progress batching and native cryptography
+
+`Store.stage_progress` keeps the last byte count and the persisted baseline per active job. `jobs` and `summary` overlay this small buffer, including negative corrections after partial-block truncation. A task owned by the download TaskGroup reports aggregate metrics every 250 ms and flushes every second in one SQLite transaction. Per-file callbacks emit row progress without querying totals or committing. Non-progress updates merge pending bytes into the immediate state transaction; explicit completion bytes override older buffered progress. Pending entries are removed only after successful commits. Pause, pool teardown, and Store.close flush remaining progress. SQLite retains WAL/FULL durability for committed transactions, and resume still uses partial-file size.
+
+The pinned manifest includes cryptg 0.6.0 only for Python below 3.15 because its published wheels stop at CPython 3.14. The stdlib launcher recognizes this single explicit manifest marker and fails on unknown markers; pip evaluates the same marker during installation. cryptg installation is binary-only. The environment probe verifies the installed version, Telethon backend selection, and a native encryption round trip. On Python 3.15, existing Telethon OpenSSL/Python fallback behavior remains available. Start.bat prefers 3.14 for new environments while retaining existing supported environments.

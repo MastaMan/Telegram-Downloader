@@ -123,10 +123,9 @@ class UITests(unittest.TestCase):
         window = Window(demo=True)
         self.assertEqual(window.parallel_box.currentData(), 20)
         self.assertFalse(window.parallel_box.isEnabled())
-        summary = dict(window.transfers_info['summary'])
         original = (window.file_name.text(), window.file_bar.value(), window.speed_value.text())
         window.on_event('progress', {'done': 70, 'size': 100, 'speed': 1024,
-                                    'message': 4, 'summary': summary})
+                                    'message': 4})
         self.assertEqual(window.table.item(3, 2).text(), '70%')
         self.assertEqual(original, (window.file_name.text(), window.file_bar.value(), window.speed_value.text()))
         window.on_event('state', 'paused')

@@ -1,5 +1,17 @@
 # Validation and release limits
 
+## Native cryptography and batched progress — 20 October 2026
+
+The source passed the full **114-test** suite on macOS with Python **3.12.3** and **3.14.8** (113 passed, Windows DPAPI skipped), and **3.15.0** (112 passed, Windows DPAPI and unavailable cryptg wheel skipped). All processes exited with code 0. The Qt test for progress events without embedded summaries was also rerun successfully after updating that fixture.
+
+cryptg 0.6.0 was installed from native wheels in the isolated 3.12 and 3.14 test environments. Tests confirm Telethon selects it and that its AES-IGE ciphertext and decrypted plaintext match the Python implementation. The launcher probe checks the pinned version, native import, backend selection, and encryption round trip. [cryptg package metadata](https://pypi.org/project/cryptg/0.6.0/#files) lists Windows x64 wheels through CPython 3.14 but no CPython 3.15 wheel. The conditional requirement preserves 3.15 without attempting a compiler build. This follows Telethon's [native acceleration guidance](https://docs.telethon.dev/en/stable/basic/installation.html#optional-dependencies).
+
+Storage tests cover display overlays before commit, account isolation, decreasing offsets after alignment, one transaction for multiple files, immediate completion/stop checkpoints, flushing on close, rollback of an entire failed batch with pending data retained, and closing the database after a checkpoint error. An engine test emits 800 progress callbacks without any SQL writes or summary scans, then verifies the owned timer persists the final count in one transaction. Existing real-file pause/stop/reopen/resume tests still pass.
+
+A controlled 10,000-item queue simulation with 20 active downloads and 20 progress rounds recorded **400 commits and 800 summary scans** for the old callback pattern versus **5 commits and 20 scans** for batching. Measured local bookkeeping time was 2.0648 s versus 0.0507 s. A separate 512 KiB AES-IGE comparison produced identical ciphertext in 0.008928 s with cryptg versus 0.652805 s with the Python-only reference. These are synthetic component measurements, not Telegram download rates or an end-to-end speed guarantee.
+
+Actual Windows launch/dependency installation, real WinRAR, and live Telegram throughput remain unverified here. Existing 3.15 virtual environments are preserved; enabling cryptg there requires switching to 3.14 as described in the user guide. For Windows acceptance, update through Check updates, confirm Activity reports cryptg on 3.11–3.14, compare the same queue/concurrency settings, and exercise Pause/Stop/restart while multiple archives are partially downloaded.
+
 ## Parallel archive downloads — 19 October 2026
 
 **107 tests per runtime: 106 passed, 1 skipped**, with exit code 0 on Python **3.15.0**, **3.14.8**, and **3.12.3** on macOS. The skip remains Windows DPAPI.

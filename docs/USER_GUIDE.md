@@ -2,7 +2,7 @@
 
 ## 1. System requirements
 
-- Windows 10 or 11, x64, with 64-bit Python 3.11–3.15. Standard CPython 3.15 is recommended; free-threaded builds and pre-releases are not supported.
+- Windows 10 or 11, x64, with 64-bit Python 3.11–3.15. Standard CPython 3.14 is recommended for cryptg acceleration; free-threaded builds and pre-releases are not supported.
 - Python's standard Tcl/Tk component, used for the first-time setup window.
 - An internet connection, access to Telegram, and enough space for the dependencies and downloaded archives. Allow roughly 1 GB for setup, in addition to your downloads.
 - A Telegram account already authorized in the official mobile app and already able to open the required group or channel.
@@ -14,11 +14,11 @@ The application is independent of 3ds Max. It runs as a normal desktop program.
 
 Extract **all files** into a writable directory, such as `C:\TelegramDownloader`. Avoid very long paths. Double-click **Start.bat** every time you want to open the app.
 
-The launcher checks installed Python versions from newest to oldest: 3.15, 3.14, 3.13, 3.12, then 3.11. It skips unsupported builds using the Windows Python launcher. It falls back to `python` on PATH. An unsupported or 32-bit interpreter produces an explanatory error. If Python is missing, the official Windows download page opens; install Python and run Start.bat again.
+The launcher checks installed Python versions in this order: 3.14, 3.15, 3.13, 3.12, then 3.11. Python 3.14 takes priority for new environments because cryptg currently has a ready-made wheel for it. It skips unsupported builds using the Windows Python launcher. It falls back to `python` on PATH. An unsupported or 32-bit interpreter produces an explanatory error. If Python is missing, the official Windows download page opens; install Python and run Start.bat again.
 
 Use standard 64-bit CPython. Alpha/beta/RC versions and free-threaded builds are not supported by this application. The launcher checks interpreter compatibility before choosing a version.
 
-When updating from the original release, keep your application data and downloaded files. Run Start.bat to update the GUI dependencies automatically. An existing supported `.venv` can continue using its original Python version. To move that environment specifically to Python 3.15, close the app, install Python 3.15, remove only the project's `.venv` directory, and run Start.bat again. Do the same if the old Python installation was removed. Credentials and the queue remain in Local AppData, outside `.venv`.
+When updating from the original release, keep your application data and downloaded files. Run Start.bat to update the GUI dependencies automatically. An existing supported `.venv` can continue using its original Python version. To enable cryptg when the existing environment uses Python 3.15, close the app, install standard Python 3.14 x64, rename only the project's `.venv` folder to `.venv.previous`, and run Start.bat. The launcher creates a new environment with 3.14 when the Windows Python launcher detects it. Keep the old folder until the new environment works. Python 3.15 remains supported if 3.14 is unavailable. Do the same if the old Python installation was removed. Credentials and the queue remain in Local AppData, outside `.venv`.
 
 On first launch, a setup window creates `.venv`, checks dependencies, and installs the required pinned versions. No administrator rights are required. Later launches check the environment and normally go straight to the application. A console window may briefly appear while Start.bat prepares the launch.
 
@@ -116,7 +116,7 @@ Install [WinRAR for Windows](https://www.win-rar.com/download.html). A standard 
 
 Every new complete download immediately joins a durable background check queue when WinRAR is available. One archive is checked at a time while the next archive downloads, so a slow WinRAR test does not block the transfer queue. If downloads outpace checks, completed files wait as Unchecked. After the last download, the app finishes remaining checks before returning to Ready.
 
-The small indicator beside **WinRAR…** shows the active check and attempt number; hover over it for the checked filename. The main download card continues showing the file being downloaded, with its own speed and progress.
+The small indicator beside **WinRAR…** shows the active check and attempt number; hover over it for the checked filename. The main download card continues showing combined speed and overall progress; individual file progress remains in the queue.
 
 **Start** resumes pending checks after Stop or restart, even if there are no new downloads. Files already Verified, Quarantined, or Check failed are not automatically rechecked. Use Check archives to retry failed checks or recheck completed files. Checks start only on Start or Check archives, not automatically when opening the app. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
 
@@ -130,7 +130,7 @@ WinRAR's test checks archive integrity; **Verified** does not mean antivirus-sca
 
 ## 8. Pause, resume, stop, and close
 
-**Pause** suspends both the active download and its background check queue (or the active scan/manual check). A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
+**Pause** suspends all active downloads and the background check queue (or the active scan/manual check). A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
 
 **Stop** cancels the active operation, including a pending network read, rate-limit wait, or this app's WinRAR process. An interrupted check and any waiting checks remain Unchecked; Start resumes them, or use Check archives. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan archives to continue scanning.
 
@@ -212,3 +212,9 @@ For a Git checkout, Git must be available on PATH, the branch must be **main**, 
 If restart fails, run Start.bat again and inspect `update.log`, `setup.log`, and `startup.log`. Source updates do not install a newer Python interpreter. Changed package requirements may need internet access during restart; dependency installation failure is reported by the normal setup window and does not automatically revert the already-installed source update.
 
 The first version containing Check updates must be installed manually over older versions that have no update button. Download the latest repository ZIP or pull main, then use the same Start.bat.
+
+## Download acceleration
+
+On Python 3.11–3.14, Start.bat installs cryptg automatically and checks that Telethon uses it. After an update, the dependency setup may appear once. Activity reports `cryptg acceleration enabled`, native OpenSSL acceleration, or the Python fallback. Python 3.15 currently has no ready-made cryptg wheel; it remains supported without requiring Rust or a C compiler.
+
+Intermediate progress is saved in batches about once per second. Pause, stop, completion, errors, and orderly exit preserve checkpoints. Displayed progress includes bytes not yet committed to the database. Actual partial files remain the authority for resuming after an interruption. The total speed/progress refreshes about four times per second, independently of individual file callbacks.

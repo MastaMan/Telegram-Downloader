@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
+from telethon.crypto import aes
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
 from .storage import parallel_downloads, Store, atomic_write, load_settings, safe_name, archive_extension
@@ -135,6 +136,7 @@ class Engine:
         if command == 'pause':
             if self.kind in {'downloading', 'scanning', 'verifying'}:
                 self.gate.clear()
+                self.store.flush_progress()
                 self.emit('state', 'paused')
             return
         if command == 'resume':
@@ -234,8 +236,10 @@ class Engine:
                 except Exception as exc:
                     self.emit('error', error_text(exc))
                 finally:
-                    self.store.close()
-                    asyncio.get_running_loop().call_soon(asyncio.get_running_loop().stop)
+                    try:
+                        self.store.close()
+                    finally:
+                        asyncio.get_running_loop().call_soon(asyncio.get_running_loop().stop)
 
     def persist_session(self):
         if self.client and self.client.session.auth_key:
@@ -363,6 +367,12 @@ class Engine:
         self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
 
     async def download_queue(self):
+        if aes.cryptg is not None:
+            self.emit('log', 'Download encryption: cryptg acceleration enabled.')
+        elif aes.libssl.decrypt_ige and aes.libssl.encrypt_ige:
+            self.emit('log', 'Download encryption: native OpenSSL acceleration enabled.')
+        else:
+            self.emit('log', 'Download encryption: Python fallback. For cryptg acceleration, use Python 3.11–3.14 with Start.bat.')
         executable = self.checker()
         self.emit('checker', executable)
         if not executable:
@@ -429,10 +439,35 @@ class Engine:
                 after = job['message']
                 await self.download_job(job, wake, account, chat)
 
+        finished = asyncio.Event()
+
+        async def workers():
+            async with asyncio.TaskGroup() as tasks:
+                for index in range(parallel_downloads(self.settings.get('parallel_downloads'))):
+                    tasks.create_task(worker(), name=f'Download {index + 1}')
+            finished.set()
+
+        async def report_progress():
+            last_checkpoint = time.monotonic()
+            while not finished.is_set():
+                try:
+                    await asyncio.wait_for(finished.wait(), timeout=.25)
+                except asyncio.TimeoutError:
+                    pass
+                now = time.monotonic()
+                if now - last_checkpoint >= 1:
+                    self.store.flush_progress()
+                    last_checkpoint = now
+                self.emit_transfers()
+
         self.emit_transfers()
-        async with asyncio.TaskGroup() as tasks:
-            for index in range(parallel_downloads(self.settings.get('parallel_downloads'))):
-                tasks.create_task(worker(), name=f'Download {index + 1}')
+        try:
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(workers(), name='Download pool')
+                tasks.create_task(report_progress(), name='Download progress')
+        finally:
+            self.store.flush_progress()
+            self.emit_transfers()
 
     async def download_job(self, job, wake, account, chat):
         after = job['message']
@@ -442,11 +477,10 @@ class Engine:
         self.store.update(account, chat, after, state='downloading', error='')
         downloaded = False
         def progress(done, speed):
-            self.store.update(account, chat, job['message'], done=done)
+            self.store.stage_progress(account, chat, job['message'], done)
             self.transfers[after].update(done=done, speed=speed, updated=time.monotonic())
-            self.emit_transfers()
             self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
-                                   'message': job['message'], 'summary': self.store.summary(account, chat)})
+                                   'message': job['message']})
         try:
             for attempt in range(4):
                 try:
