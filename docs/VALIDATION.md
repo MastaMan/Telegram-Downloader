@@ -1,5 +1,17 @@
 # Validation and release limits
 
+## Active progress row and paginated queue filters — 20 October 2026
+
+The final candidate ran **183 tests per runtime** on macOS with portable PowerShell enabled. Python **3.14.8** passed **182**, with Windows DPAPI skipped; Python **3.15.0** passed **181**, with Windows DPAPI and unavailable cryptg skipped. Both processes exited successfully. The interpreter probe and Python syntax checks also passed.
+
+A real SQLite fixture with **100,005 archives** verifies that five unfinished files remain reachable beyond 100,000 completed entries, active downloads/checks sort first, downloaded history spans 500 pages, and the final All page is reachable. Another fixture traverses every page without omissions or duplicates, then completes the last-page files and checks clamping. Tests preserve account/chat isolation, pending progress overlays, completed/quarantined history, and totals.
+
+Engine checks change filters/pages while an operation is paused and verify that it is neither canceled nor resumed. GUI checks cover all three filters, the Unfinished default, removal of completed rows, direct page entry with Enter, stale-response rejection, last-page clamping while the number field retains focus, and active progress independent of the displayed page. Twenty tiles fit at the minimum window width with complete percentages; pause retains values, live progress updates the matching tile, and chat switching clears the strip.
+
+The real Qt demo was visually inspected at 1220×850 and 1000×680, including 2, 10, and 20 active transfers and the expanded Activity log while paused. The default preview was updated. The added progress row and page controls leave room for 16 full queue rows at the default size and 10 at the minimum size with Activity collapsed.
+
+These are local/offscreen and simulated transfer results, not a Windows or live Telegram run. Windows acceptance should verify all percentages at the user's display scaling, page-number entry, switching filters during transfers, browsing a later page while the upper bars advance, and Pause/Stop/restart with an existing queue.
+
 ## Header version, dropdown arrows, and Settings — 20 October 2026
 
 The final candidate ran **177 tests** on macOS with Python **3.14.8** and portable PowerShell enabled: **176 passed, 1 skipped** (Windows DPAPI), exit code 0. Interpreter and Python syntax checks passed. The header version, Lucide dropdown chevrons, and renamed Settings block were visually inspected at 1220×850 and 1000×680; the documentation screenshot was refreshed.

@@ -89,6 +89,51 @@ class StorageTests(unittest.TestCase):
         self.store.scanned(1, 10, 50)
         self.assertEqual(self.store.cursor(1, 10), 100)
 
+    def test_queue_pages_reach_archives_beyond_a_large_completed_history(self):
+        with self.store.db:
+            self.store.db.executemany(
+                "INSERT INTO jobs(account,chat,message,document,name,size,path,state,done) VALUES (1,10,?,'1','model.zip',200,'model.zip',?,?)",
+                ((i, 'done' if i <= 100000 else 'queued', 200 if i <= 100000 else 0) for i in range(1, 100006)))
+        self.store.update(1, 10, 100005, state='downloading')
+        self.store.stage_progress(1, 10, 100005, 75)
+        unfinished = self.store.queue_page(1, 10)
+        self.assertEqual(unfinished['matching'], 5)
+        self.assertEqual([row['message'] for row in unfinished['rows']], [100005, 100001, 100002, 100003, 100004])
+        self.assertEqual(unfinished['rows'][0]['done'], 75)
+        self.store.update(1, 10, 99999, verification='checking')
+        downloaded = self.store.queue_page(1, 10, 'downloaded')
+        self.assertEqual(downloaded['matching'], 100000)
+        self.assertEqual(downloaded['pages'], 500)
+        self.assertEqual(downloaded['rows'][0]['message'], 99999)
+        all_first = self.store.queue_page(1, 10, 'all')
+        self.assertEqual([row['message'] for row in all_first['rows'][:2]], [100005, 99999])
+        last = self.store.queue_page(1, 10, 'all', 999999)
+        self.assertEqual(last['page'], 500)
+        self.assertEqual(last['matching'], 100005)
+        self.assertEqual(len(last['rows']), 5)
+        self.assertEqual(last['rows'][-1]['message'], 100000)
+        self.assertEqual(self.store.queue_page(2, 10)['matching'], 0)
+        self.assertEqual(self.store.queue_page(1, 99)['rows'], [])
+
+    def test_queue_pages_are_complete_and_clamp_when_the_last_page_disappears(self):
+        with self.store.db:
+            self.store.db.executemany(
+                "INSERT INTO jobs(account,chat,message,document,name,size,path,state) VALUES (1,10,?,'1','model.zip',200,'model.zip','queued')",
+                ((i,) for i in range(1, 404)))
+        seen = []
+        for page in range(3):
+            result = self.store.queue_page(1, 10, page=page)
+            seen.extend(row['message'] for row in result['rows'])
+        self.assertEqual(seen, list(range(1, 404)))
+        for message in range(201, 404):
+            self.store.update(1, 10, message, state='done', done=200, verification='quarantined')
+        result = self.store.queue_page(1, 10, page=2)
+        self.assertEqual((result['page'], result['pages'], result['matching']), (0, 1, 200))
+        self.assertEqual(self.store.queue_page(1, 10, 'downloaded')['matching'], 203)
+        self.assertEqual(self.store.summary(1, 10)['total'], 403)
+        with self.assertRaises(ValueError):
+            self.store.queue_page(1, 10, 'invalid')
+
     def test_scan_is_atomic_on_invalid_item(self):
         self.store.scanned(1, 10, 1)
         with self.assertRaises(KeyError):

@@ -9,6 +9,7 @@ import sys
 import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QLockFile, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 from shiboken6 import delete, isValid
 from tgzip.engine import Bridge
@@ -39,9 +40,9 @@ class UITests(unittest.TestCase):
         window = Window(demo=True)
         window.show()
         self.app.processEvents()
-        self.assertEqual(window.table.rowCount(), 12)
+        self.assertEqual(window.table.rowCount(), 10)
         self.assertFalse(window.activity.isVisible())
-        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 19)
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 16)
         summary = window.transfers_info['summary']
         self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))
         self.assertEqual(window.file_name.text(), '4 active downloads')
@@ -63,7 +64,7 @@ class UITests(unittest.TestCase):
         window.show()
         self.app.processEvents()
         self.assertEqual((window.width(), window.height()), (1000, 680))
-        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 13)
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 10)
         for state in ('downloading', 'paused', 'idle'):
             window.on_event('state', state)
             window.activity_toggle.click()
@@ -97,6 +98,92 @@ class UITests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(screenshot.exists())
             self.assertGreater(screenshot.stat().st_size, 1000)
+
+    def test_active_strip_fits_twenty_files_and_preserves_each_progress_on_pause(self):
+        window = Window(demo=True)
+        window.resize(1000, 680)
+        window.show()
+        files = [dict(message=i, name=f'Long model archive number {i}.zip', path=f'{i}.zip',
+                      size=100, done=i * 5) for i in range(1, 21)]
+        window.on_event('transfers', dict(window.transfers_info, files=files, active=20))
+        self.app.processEvents()
+        self.assertEqual(len(window.transfer_tiles), 20)
+        self.assertEqual(window.width(), 1000)
+        for i, tile in window.transfer_tiles.items():
+            self.assertEqual(tile.percent.text(), f'{i * 5}%')
+            self.assertEqual(tile.bar.value(), i * 50)
+            self.assertGreaterEqual(tile.percent.width(), tile.percent.fontMetrics().horizontalAdvance(tile.percent.text()))
+            self.assertLessEqual(tile.x() + tile.width(), window.active_strip.width())
+        tile = window.transfer_tiles[3]
+        window.on_event('progress', {'message': 3, 'done': 77, 'size': 100, 'speed': 10})
+        self.assertEqual(tile.percent.text(), '77%')
+        window.on_event('state', 'paused')
+        self.assertEqual(tile.bar.value(), 770)
+        self.assertIn('Paused', tile.toolTip())
+        window.on_event('transfers', dict(window.transfers_info, files=files[2:4], active=2))
+        self.assertIs(window.transfer_tiles[3], tile)
+        self.assertEqual(set(window.transfer_tiles), {3, 4})
+        window.on_event('selected', -100456)
+        self.assertFalse(window.transfer_tiles)
+        self.assertFalse(window.active_strip.isVisible())
+        window.close()
+
+    def test_three_queue_filters_default_to_unfinished_without_affecting_transfers(self):
+        window = Window(demo=True)
+        self.assertEqual(window.queue_filter.currentData(), 'unfinished')
+        self.assertEqual(set(window.queue_rows), set(range(3, 13)))
+        self.assertIn('10 remaining', window.queue_caption.text())
+        original_tiles = dict(window.transfer_tiles)
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('downloaded'))
+        self.assertEqual(set(window.queue_rows), {1, 2})
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('all'))
+        self.assertEqual(len(window.queue_rows), 12)
+        self.assertEqual(window.table.item(0, 0).data(Qt.ItemDataRole.UserRole), 3)
+        self.assertEqual(window.transfer_tiles, original_tiles)
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('unfinished'))
+        rows = list(window.demo_rows)
+        rows[2] = dict(rows[2], state='done', done=rows[2]['size'], verification='pending')
+        window.demo_rows = rows
+        window.demo_summary = dict(window.demo_summary, complete=3)
+        window.render_demo_queue()
+        self.assertNotIn(3, window.queue_rows)
+        self.assertIn('9 remaining', window.queue_caption.text())
+        self.assertEqual(window.state, 'downloading')
+        window.close()
+
+    def test_queue_paging_jump_clamp_and_stale_responses(self):
+        window = Window(demo=True)
+        window.show()
+        self.app.processEvents()
+        template = window.demo_rows[0]
+        window.demo_rows = [dict(template, message=i, state='queued', done=0) for i in range(1, 451)]
+        window.demo_rows[-1] = dict(window.demo_rows[-1], state='downloading', done=50)
+        window.demo_summary = dict(window.demo_summary, total=450, complete=0)
+        window.request_queue_page(0)
+        self.assertEqual(window.table.rowCount(), 200)
+        self.assertEqual(window.table.item(0, 0).data(Qt.ItemDataRole.UserRole), 450)
+        first_reply = dict(window.queue_snapshot)
+        window.page_number.setFocus()
+        window.page_number.setText('3')
+        QTest.keyClick(window.page_number, Qt.Key.Key_Return)
+        self.assertEqual(window.queue_page, 2)
+        self.assertEqual(window.table.rowCount(), 50)
+        self.assertEqual(window.page_number.text(), '3')
+        self.assertIn('401–450 of 450', window.total_label.text())
+        self.assertFalse(window.next_page.isEnabled())
+        self.assertTrue(window.first_page.isEnabled())
+        current_messages = set(window.queue_rows)
+        window.on_event('queue', first_reply)
+        self.assertEqual(set(window.queue_rows), current_messages)
+        # Finishing the last page clamps navigation rather than leaving a blank page.
+        window.demo_rows = window.demo_rows[:100]
+        window.demo_summary = dict(window.demo_summary, total=100)
+        window.render_demo_queue()
+        self.assertEqual((window.queue_page, window.queue_pages), (0, 1))
+        self.assertEqual(window.page_number.text(), '1')
+        self.assertEqual(window.table.rowCount(), 100)
+        self.assertEqual(len(window.transfer_tiles), 4)
+        window.close()
 
     def test_saved_queue_shows_overall_progress_before_start_and_after_stop(self):
         window = Window()
@@ -168,8 +255,9 @@ class UITests(unittest.TestCase):
 
     def test_verification_states_are_distinct_from_download_progress(self):
         window = Window(demo=True)
-        self.assertEqual(window.table.item(0, 3).text(), 'Verified')
-        self.assertEqual(window.table.item(1, 3).text(), 'Checking…')
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('downloaded'))
+        self.assertEqual(window.table.item(window.queue_rows[1], 3).text(), 'Verified')
+        self.assertEqual(window.table.item(window.queue_rows[2], 3).text(), 'Checking…')
         window.on_event('state', 'idle')
         self.assertTrue(window.verify_btn.isEnabled())
         window.on_event('verification', None)
@@ -219,15 +307,16 @@ class UITests(unittest.TestCase):
         original = (window.file_name.text(), window.file_bar.value(), window.speed_value.text())
         window.on_event('progress', {'done': 70, 'size': 100, 'speed': 1024,
                                     'message': 4})
-        self.assertEqual(window.table.item(3, 2).text(), '70%')
-        self.assertAlmostEqual(window.table.item(3, 2).data(Qt.ItemDataRole.UserRole), .7)
-        self.assertEqual(window.table.item(3, 1).text(), '70 B / 100 B')
+        row = window.queue_rows[4]
+        self.assertEqual(window.table.item(row, 2).text(), '70%')
+        self.assertAlmostEqual(window.table.item(row, 2).data(Qt.ItemDataRole.UserRole), .7)
+        self.assertEqual(window.table.item(row, 1).text(), '70 B / 100 B')
         self.assertEqual(original, (window.file_name.text(), window.file_bar.value(), window.speed_value.text()))
         window.on_event('state', 'paused')
-        self.assertEqual(window.table.item(3, 3).text(), 'Paused')
+        self.assertEqual(window.table.item(row, 3).text(), 'Paused')
         self.assertEqual(window.speed_value.text(), '—')
         window.on_event('state', 'downloading')
-        self.assertEqual(window.table.item(3, 3).text(), 'Downloading')
+        self.assertEqual(window.table.item(row, 3).text(), 'Downloading')
         window.on_event('state', 'idle')
         self.assertTrue(window.parallel_box.isEnabled())
         window.on_event('settings', {'parallel_downloads': 5})
@@ -251,7 +340,7 @@ class UITests(unittest.TestCase):
     def test_row_selection_pins_progress_without_changing_overall_bar(self):
         window = Window(demo=True)
         overall = window.file_bar.value()
-        window.table.setCurrentCell(3, 0)
+        window.table.setCurrentCell(window.queue_rows[4], 0)
         self.assertFalse(window.archive_follow.isChecked())
         self.assertEqual(window.watched_job['message'], 4)
         self.assertEqual(window.archive_bar.value(), 400)
@@ -273,7 +362,8 @@ class UITests(unittest.TestCase):
 
     def test_completed_selection_stays_visible_until_auto_follow_is_enabled(self):
         window = Window(demo=True)
-        window.table.setCurrentCell(0, 0)
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('all'))
+        window.table.setCurrentCell(window.queue_rows[1], 0)
         self.assertEqual(window.archive_bar.value(), 1000)
         self.assertEqual(window.watched_job['message'], 1)
         window.on_event('verification', {'name': 'another.zip', 'detail': 'Checking attempt 2/3'})
@@ -282,7 +372,7 @@ class UITests(unittest.TestCase):
         self.assertEqual(window.watched_job['message'], 3)
         self.assertEqual(window.archive_bar.value(), 620)
         # Clicking the still-highlighted row must pin it again after Auto-follow.
-        window.table.cellClicked.emit(0, 0)
+        window.table.cellClicked.emit(window.queue_rows[1], 0)
         self.assertEqual(window.watched_job['message'], 1)
         self.assertFalse(window.archive_follow.isChecked())
         window.close()

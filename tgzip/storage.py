@@ -8,6 +8,8 @@ from pathlib import Path
 
 CHUNK = 512 * 1024
 SPEED_LIMITS = (0, 10, 5, 2, 1, 0.5, 0.25)
+QUEUE_PAGE_SIZE = 200
+QUEUE_ORDER = "CASE WHEN state='downloading' THEN 0 WHEN state='done' AND verification='checking' THEN 1 WHEN state!='done' THEN 2 ELSE 3 END"
 
 
 def speed_limit(value=None):
@@ -163,6 +165,7 @@ class Store:
             self.db.execute("UPDATE jobs SET state='queued' WHERE state='downloading'")
             self.db.execute("UPDATE jobs SET verification='pending' WHERE verification='checking'")
             self.db.execute("CREATE INDEX IF NOT EXISTS pending_archive_checks ON jobs(account,chat,message) WHERE state='done' AND verification='pending'")
+            self.db.execute(f"CREATE INDEX IF NOT EXISTS queue_display_order ON jobs(account,chat,({QUEUE_ORDER}),message)")
 
     def cursor(self, account, chat):
         row = self.db.execute("SELECT cursor FROM scans WHERE account=? AND chat=?", (account, chat)).fetchone()
@@ -265,6 +268,23 @@ class Store:
         row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND message>? AND state!='done' ORDER BY message LIMIT 1",
                               (account, chat, after)).fetchone()
         return dict(row) if row else None
+
+    def queue_page(self, account, chat, mode='unfinished', page=0):
+        conditions = {'unfinished': " AND state!='done'", 'downloaded': " AND state='done'", 'all': ''}
+        if mode not in conditions:
+            raise ValueError('Unknown queue filter')
+        where = 'account=? AND chat=?' + conditions[mode]
+        total = self.db.execute(f'SELECT COUNT(*) FROM jobs WHERE {where}', (account, chat)).fetchone()[0]
+        pages = max(1, (total + QUEUE_PAGE_SIZE - 1) // QUEUE_PAGE_SIZE)
+        page = max(0, min(int(page), pages - 1))
+        rows = [dict(row) for row in self.db.execute(
+            f'SELECT * FROM jobs WHERE {where} ORDER BY {QUEUE_ORDER},message LIMIT ? OFFSET ?',
+            (account, chat, QUEUE_PAGE_SIZE, page * QUEUE_PAGE_SIZE))]
+        for row in rows:
+            progress = self.progress_pending.get((account, chat, row['message']))
+            if progress is not None:
+                row['done'] = progress[2]
+        return dict(rows=rows, page=page, pages=pages, matching=total, mode=mode, page_size=QUEUE_PAGE_SIZE)
 
     def next_check_job(self, account, chat, after=0):
         row = self.db.execute("SELECT * FROM jobs WHERE account=? AND chat=? AND message>? AND state='done' AND verification!='quarantined' ORDER BY message LIMIT 1",

@@ -49,6 +49,39 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.is_connected())
         await client.disconnect()
 
+    async def test_queue_view_changes_while_paused_without_canceling_work(self):
+        engine = self.engine
+        engine.chat = -100
+        with engine.store.db:
+            engine.store.db.executemany(
+                "INSERT INTO jobs(account,chat,message,document,name,size,path,state,done) VALUES (123,-100,?,'1','a.zip',100,'a.zip',?,?)",
+                ((i, 'done' if i <= 205 else 'queued', 100 if i <= 205 else 0) for i in range(1, 411)))
+        stopped = asyncio.Event()
+        async def active_work():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        engine.launch('downloading', active_work)
+        await asyncio.sleep(0)
+        await engine.command('pause')
+        await engine.command('queue_view', mode='unfinished', page=1, request=1)
+        value = [value for name, value in self.events if name == 'queue'][-1]
+        self.assertEqual((value['page'], value['pages'], value['matching'], value['request']), (1, 2, 205, 1))
+        self.assertEqual(len(value['rows']), 5)
+        self.assertFalse(engine.gate.is_set())
+        self.assertFalse(stopped.is_set())
+        await engine.command('queue_view', mode='downloaded', page=0, request=2)
+        value = [value for name, value in self.events if name == 'queue'][-1]
+        self.assertTrue(all(row['state'] == 'done' for row in value['rows']))
+        self.assertEqual(value['summary']['total'], 410)
+        self.assertEqual(value['chat'], -100)
+        await engine.command('select', chat=-200)
+        self.assertTrue(stopped.is_set())
+        value = [value for name, value in self.events if name == 'queue'][-1]
+        self.assertEqual((value['page'], value['pages'], value['matching']), (0, 1, 0))
+        self.assertEqual(value['mode'], 'downloaded')
+
     async def test_switch_chat_cancels_active_work_and_saves_selection(self):
         self.engine.chat = -100
         stopped = asyncio.Event()

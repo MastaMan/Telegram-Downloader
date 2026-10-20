@@ -87,19 +87,29 @@ class Engine:
         self.closing = False
         self.control = asyncio.Lock()
         self.transfers = {}
+        self.queue_mode = 'unfinished'
+        self.queue_page = 0
+        self.queue_request = 0
+        self.queue_dirty = False
         self.limiter = DownloadLimiter(self.settings.get('speed_limit'))
 
     def save_settings(self):
         atomic_write(self.settings_path, json.dumps(self.settings, indent=2).encode('utf-8'))
 
     def snapshot(self):
+        self.queue_dirty = False
         if self.account and self.chat:
             for job in self.store.pending_quarantines(self.account, self.chat):
                 self.recover_quarantine(job)
-            self.emit('queue', {'rows': self.store.jobs(self.account, self.chat, limit=1000),
-                                'summary': self.store.summary(self.account, self.chat)})
+            value = self.store.queue_page(self.account, self.chat, self.queue_mode, self.queue_page)
+            self.queue_page = value['page']
+            self.emit('queue', dict(value, summary=self.store.summary(self.account, self.chat),
+                                   request=self.queue_request, account=self.account, chat=self.chat))
         else:
-            self.emit('queue', {'rows': [], 'summary': {'total': 0, 'bytes': 0, 'received': 0, 'complete': 0, 'failed': 0}})
+            self.queue_page = 0
+            self.emit('queue', {'rows': [], 'summary': {'total': 0, 'bytes': 0, 'received': 0, 'complete': 0, 'failed': 0},
+                                'mode': self.queue_mode, 'page': 0, 'pages': 1, 'matching': 0,
+                                'request': self.queue_request, 'account': self.account, 'chat': self.chat})
 
     async def cancel(self):
         if self.task and not self.task.done():
@@ -150,7 +160,15 @@ class Engine:
                 self.emit('state', self.kind)
             return
         async with self.control:
-            if command == 'boot':
+            if command == 'queue_view':
+                mode = args.get('mode', 'unfinished')
+                if mode not in {'unfinished', 'downloaded', 'all'}:
+                    raise ValueError('Unknown queue filter')
+                self.queue_mode = mode
+                self.queue_page = max(0, int(args.get('page', 0)))
+                self.queue_request = int(args.get('request', 0))
+                self.snapshot()
+            elif command == 'boot':
                 self.emit('settings', self.settings)
                 self.emit('checker', self.checker())
                 self.secrets = self.vault.load()
@@ -182,6 +200,7 @@ class Engine:
                 if chat not in self.dialogs:
                     raise ValueError('Chat not accessible')
                 self.chat = chat
+                self.queue_page = 0
                 self.settings.setdefault('selected_chats', {})[str(self.account)] = chat
                 self.save_settings()
                 self.emit('selected', chat)
@@ -345,6 +364,7 @@ class Engine:
         self.emit('dialogs', rows)
         previous = self.settings.get('selected_chats', {}).get(str(self.account))
         self.chat = previous if previous in dialogs else None
+        self.queue_page = 0
         if previous and not self.chat:
             self.emit('log', 'The saved chat is not currently accessible. Choose a chat from the list.')
         self.emit('selected', self.chat)
@@ -561,6 +581,8 @@ class Engine:
                     self.store.flush_progress()
                     last_checkpoint = now
                 self.emit_transfers()
+                if self.queue_dirty:
+                    self.snapshot()
 
         self.emit_transfers()
         try:
@@ -602,6 +624,7 @@ class Engine:
         self.emit_transfers()
         self.emit('current', job)
         self.store.update(account, chat, after, state='downloading', error='')
+        self.queue_dirty = True
         downloaded = False
         def progress(done, speed):
             self.store.stage_progress(account, chat, job['message'], done)

@@ -107,7 +107,9 @@ The limit uses the same binary units as the progress display: 1 MB/s means 1,048
 
 The compact interface gives most of the window to the queue. Shorter controls and dense rows keep more archives visible without reducing the main text size. **Activity** in the queue header expands or collapses the session log; it is collapsed by default. **WinRAR…** and **Check archives** are grouped under **Archive checks** in the left sidebar, with a separate background-check status. Extra explanations and full truncated names are available in tooltips.
 
-The separate **File** bar beneath the overall download metrics shows one archive's name, downloaded/total bytes, and percentage. **Follow active** is enabled by default: the display stays on one active file, then switches when that file finishes or stops. It also works for active files beyond the first 1,000 visible queue entries.
+Below the overall metrics, a single horizontal row shows **one progress bar for each active download**. Two simultaneous downloads show two bars; ten show ten, up to the 20-download limit. Percentages stay visible; long names are shortened to fit. Hover over a tile for its full filename, byte counts, status, and saved path. The row updates independently of the queue page and filter. Pause retains its progress; completed/stopped transfers leave the row as their slots close.
+
+The separate **File** bar beneath that row shows one archive's name, downloaded/total bytes, and percentage. **Follow active** is enabled by default: the display stays on one active file, then switches when that file finishes or stops. It also works for active files outside the currently displayed page.
 
 Click an archive row (or select it with the keyboard) to pin that file's progress. This disables Follow active and does not change the overall progress or downloads. Completed files remain visible at 100%; queued files show their saved progress. Enable **Follow active** to return to automatic tracking. Pause/Stop retain the last progress, and changing chats clears the watched file. Hover over its name for the full name and saved path.
 
@@ -116,6 +118,7 @@ The interface shows:
 | Display | Meaning |
 | --- | --- |
 | Main download bar | Received bytes across the full queue; the title shows the number of active downloads |
+| Active download row | Independent progress and percentage for every currently active transfer |
 | File bar | Progress of one automatically followed or explicitly selected archive, with its name and byte counts |
 | Transferred | Downloaded bytes / full size for each archive, updated during transfer |
 | Row progress | A small progress bar and percentage for each individual archive |
@@ -130,7 +133,19 @@ The interface shows:
 | Check failed | Could not reliably test or move the file; hover for details |
 | Failed | Hover over the row and check Activity for the reason |
 
-The queue processes every saved entry. For responsiveness, the table displays the first 1,000 entries; totals include the full queue.
+The queue processes every saved entry. The filter next to **Download queue** has three modes:
+
+- **Unfinished** (the default each launch): queued, downloading/paused, and failed downloads.
+- **Downloaded**: completed downloads, including archives awaiting checks, being checked, failing checks, or moved to `wrong_archives`.
+- **All**: both groups.
+
+The caption shows the number remaining and downloaded across the selected chat. Filtering changes only the display; it does not pause, retry, delete, or mark any archive.
+
+The table displays **200 matching archives per page**, with no 1,000-file history cutoff. Use **First**, **Previous**, **Next**, **Last**, or type a number in **Page** and press Enter. The range above the table and the page count refer to the current filter; overall progress still includes the full queue. An empty filter shows page 1 of 1 with no rows.
+
+Active downloads appear first, followed by archives currently being checked when the filter includes downloaded files, then unfinished archives in message order, and completed history. On the first Unfinished page, active downloads are followed by the next queued/retry candidates. Start continues using its existing queue order; changing pages never changes scheduling.
+
+Pages are live: finishing or starting files can move rows, and an emptied last page moves back to the last remaining page. Changing filters or chats returns to page 1. The upper row of active download bars remains visible even when you browse completed history or a later page. Selecting a row pins the separate File bar by file identity across page refreshes.
 
 ### Password and integrity checks
 

@@ -3,14 +3,14 @@ import time
 from pathlib import Path
 import qrcode
 from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF, QIntValidator
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
-from .storage import parallel_downloads, speed_limit, SPEED_LIMITS
+from .storage import parallel_downloads, speed_limit, SPEED_LIMITS, QUEUE_PAGE_SIZE
 from . import __version__
 
 STYLE = '''
@@ -115,6 +115,39 @@ class ElidedLabel(QLabel):
         painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
         text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideMiddle, self.contentsRect().width())
         painter.drawText(self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+
+class ActiveTransfer(QWidget):
+    """A narrow, stable tile for one member of the active download pool."""
+
+    def __init__(self):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(48)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self.percent = label('0%')
+        self.percent.setStyleSheet('font-size: 12px; font-weight: 600; background: transparent;')
+        self.percent.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.percent.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.name = ElidedLabel('', 'muted')
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        layout.addWidget(self.percent)
+        layout.addWidget(self.name)
+        layout.addWidget(self.bar)
+
+    def update_job(self, job, paused=False):
+        fraction = max(0, min(1, job['done'] / max(1, job['size'])))
+        self.percent.setText(f'{fraction:.0%}')
+        self.name.setText(job['name'])
+        self.bar.setValue(round(fraction * 1000))
+        detail = (f'{job["name"]}\n{size_text(job["done"])} / {size_text(job["size"])}'
+                  f'\n{"Paused" if paused else "Downloading"}\n{job["path"]}')
+        for widget in (self, self.name, self.percent, self.bar):
+            widget.setToolTip(detail)
 
 
 class ProgressDelegate(QStyledItemDelegate):
@@ -281,6 +314,13 @@ class Window(QMainWindow):
         self.queue_rows = {}
         self.queue_jobs = {}
         self.active_files = {}
+        self.transfer_tiles = {}
+        self.queue_snapshot = None
+        self.queue_page = 0
+        self.queue_pages = 1
+        self.queue_request = 0
+        self.demo_rows = []
+        self.demo_summary = None
         self.watched_job = None
         self.qr_dialog = None
         self.password_dialog = None
@@ -444,6 +484,13 @@ class Window(QMainWindow):
             column.addWidget(value)
             metrics.addLayout(column)
         current.addLayout(metrics)
+        self.active_strip = QWidget()
+        self.active_strip.setObjectName('transparent')
+        self.active_layout = QHBoxLayout(self.active_strip)
+        self.active_layout.setContentsMargins(0, 0, 0, 0)
+        self.active_layout.setSpacing(1)
+        self.active_strip.hide()
+        current.addWidget(self.active_strip)
         archive_heading = QHBoxLayout()
         archive_heading.addWidget(label('File', 'muted'))
         self.archive_name = ElidedLabel('No file selected', 'muted')
@@ -477,6 +524,12 @@ class Window(QMainWindow):
         queue_heading.addWidget(label('Download queue', 'section'))
         self.queue_caption = ElidedLabel('No archives yet', 'muted')
         queue_heading.addWidget(self.queue_caption, 1)
+        self.queue_filter = ArrowComboBox()
+        for text, mode in [('Unfinished', 'unfinished'), ('Downloaded', 'downloaded'), ('All', 'all')]:
+            self.queue_filter.addItem(text, mode)
+        self.queue_filter.setToolTip('Filter the saved queue without changing downloads. Downloaded includes unchecked and quarantined archives.')
+        self.queue_filter.currentIndexChanged.connect(lambda: self.request_queue_page(0))
+        queue_heading.addWidget(self.queue_filter)
         self.activity_toggle = button('Activity', lambda: self.activity.setVisible(self.activity_toggle.isChecked()))
         self.activity_toggle.setCheckable(True)
         self.activity_toggle.setToolTip('Show or hide the session log.')
@@ -501,6 +554,29 @@ class Window(QMainWindow):
             self.table.setColumnWidth(index, width)
         self.table.setMinimumHeight(200)
         queue.addWidget(self.table, 1)
+        paging = QHBoxLayout()
+        self.first_page = button('First', lambda: self.request_queue_page(0))
+        self.prev_page = button('Previous', lambda: self.request_queue_page(self.queue_page - 1))
+        self.next_page = button('Next', lambda: self.request_queue_page(self.queue_page + 1))
+        self.last_page = button('Last', lambda: self.request_queue_page(self.queue_pages - 1))
+        paging.addWidget(self.first_page)
+        paging.addWidget(self.prev_page)
+        paging.addStretch()
+        paging.addWidget(label('Page', 'muted'))
+        self.page_number = QLineEdit('1')
+        self.page_number.setValidator(QIntValidator(1, 1, self.page_number))
+        self.page_number.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_number.setFixedWidth(76)
+        self.page_number.setToolTip('Type a page number and press Enter.')
+        self.page_number.editingFinished.connect(self.go_to_typed_page)
+        paging.addWidget(self.page_number)
+        self.page_count = label('of 1', 'muted')
+        paging.addWidget(self.page_count)
+        paging.addStretch()
+        paging.addWidget(self.next_page)
+        paging.addWidget(self.last_page)
+        queue.addLayout(paging)
+        self.update_pager()
         content.addWidget(queue_card, 1)
         self.activity = QPlainTextEdit()
         self.activity.setReadOnly(True)
@@ -590,8 +666,14 @@ class Window(QMainWindow):
 
     def update_summary(self, summary):
         self.done_value.setText(f'{summary["complete"]} / {summary["total"]}')
-        self.queue_caption.setText(f'{summary["total"]:,} files · {summary["failed"]} failed · {summary.get("quarantined", 0)} quarantined')
-        self.total_label.setText(f'{size_text(summary["bytes"])} total · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
+        remaining = summary['total'] - summary['complete']
+        self.queue_caption.setText(f'{remaining:,} remaining · {summary["complete"]:,} downloaded · {summary["failed"]} failed')
+        mode = self.queue_filter.currentData()
+        matching = {'all': summary['total'], 'downloaded': summary['complete'], 'unfinished': remaining}[mode]
+        start = self.queue_page * QUEUE_PAGE_SIZE + 1 if self.table.rowCount() else 0
+        end = start + self.table.rowCount() - 1 if start else 0
+        scope = 'files' if mode == 'all' else mode
+        self.total_label.setText(f'{start:,}–{end:,} of {matching:,} {scope} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("quarantined", 0)} quarantined · {summary.get("check_failed", 0)} check errors')
         if self.state in {'idle', 'scanning'}:
             # The single aggregate bar also represents a restored or stopped queue.
             # Active operations such as filename restoration own it until they finish.
@@ -618,13 +700,83 @@ class Window(QMainWindow):
     def reset_archive(self):
         self.queue_jobs = {}
         self.active_files = {}
+        self.queue_snapshot = None
+        self.queue_rows = {}
+        self.queue_page = 0
+        self.queue_pages = 1
+        self.update_pager(force=True)
+        self.render_active_transfers()
         self.watched_job = None
         self.table.blockSignals(True)
         self.table.clearSelection()
         self.table.setCurrentCell(-1, -1)
+        self.table.setRowCount(0)
         self.table.blockSignals(False)
         self.archive_follow.setChecked(True)
         self.render_archive()
+
+    def render_active_transfers(self):
+        for message in list(self.transfer_tiles):
+            if message not in self.active_files:
+                tile = self.transfer_tiles.pop(message)
+                self.active_layout.removeWidget(tile)
+                tile.hide()
+                tile.deleteLater()
+        # Retain positions while active; newly occupied slots append at the right.
+        for message, job in self.active_files.items():
+            if message not in self.transfer_tiles:
+                tile = ActiveTransfer()
+                self.transfer_tiles[message] = tile
+                self.active_layout.addWidget(tile, 1)
+            self.transfer_tiles[message].update_job(job, paused=self.state == 'paused')
+        self.active_strip.setVisible(bool(self.transfer_tiles))
+
+    def update_pager(self, force=False):
+        self.page_number.validator().setTop(self.queue_pages)
+        if force or not self.page_number.hasFocus():
+            self.page_number.setText(str(self.queue_page + 1))
+        self.page_count.setText(f'of {self.queue_pages:,}')
+        self.first_page.setEnabled(self.queue_page > 0)
+        self.prev_page.setEnabled(self.queue_page > 0)
+        self.next_page.setEnabled(self.queue_page + 1 < self.queue_pages)
+        self.last_page.setEnabled(self.queue_page + 1 < self.queue_pages)
+
+    def go_to_typed_page(self):
+        if self.page_number.hasAcceptableInput():
+            page = int(self.page_number.text()) - 1
+            if page != self.queue_page:
+                self.request_queue_page(page)
+        self.page_number.setText(str(self.queue_page + 1))
+
+    def request_queue_page(self, page):
+        self.queue_request += 1
+        self.queue_page = max(0, min(page, self.queue_pages - 1))
+        self.table.setRowCount(0)
+        self.queue_rows = {}
+        self.queue_jobs = {}
+        self.total_label.setText('Loading page…')
+        self.update_pager(force=True)
+        if self.demo:
+            self.render_demo_queue()
+        else:
+            self.send('queue_view', mode=self.queue_filter.currentData(), page=self.queue_page,
+                      request=self.queue_request)
+
+    def render_demo_queue(self):
+        if self.demo_summary is None:
+            return
+        mode = self.queue_filter.currentData()
+        rows = [row for row in self.demo_rows if mode == 'all' or (row['state'] == 'done') == (mode == 'downloaded')]
+        def priority(row):
+            return (0 if row['state'] == 'downloading' else
+                    1 if row['state'] == 'done' and row.get('verification') == 'checking' else
+                    2 if row['state'] != 'done' else 3, row['message'])
+        rows.sort(key=priority)
+        pages = max(1, (len(rows) + QUEUE_PAGE_SIZE - 1) // QUEUE_PAGE_SIZE)
+        page = min(self.queue_page, pages - 1)
+        self.on_event('queue', dict(rows=rows[page * QUEUE_PAGE_SIZE:(page + 1) * QUEUE_PAGE_SIZE],
+                                   summary=self.demo_summary, mode=mode, page=page, pages=pages,
+                                   matching=len(rows), request=self.queue_request))
 
     def watch_queue_file(self, row, column, previous_row, previous_column):
         item = self.table.item(row, 0) if row >= 0 else None
@@ -780,6 +932,8 @@ class Window(QMainWindow):
             for job in (self.active_files.get(value['message']), self.queue_jobs.get(value['message']), self.watched_job):
                 if job is not None and job['message'] == value['message']:
                     job.update(done=value['done'], size=value['size'])
+            if value['message'] in self.transfer_tiles and value['message'] in self.active_files:
+                self.transfer_tiles[value['message']].update_job(self.active_files[value['message']], self.state == 'paused')
             self.last_progress = time.monotonic()
             percent = value['done'] / max(1, value['size'])
             if self.transfers_info is None:
@@ -798,14 +952,25 @@ class Window(QMainWindow):
             if 'summary' in value:
                 self.update_summary(value['summary'])
         elif name == 'queue':
+            if value.get('request', self.queue_request) != self.queue_request or value.get('mode', self.queue_filter.currentData()) != self.queue_filter.currentData():
+                return
+            if 'chat' in value and (value['chat'] != self.selected or value['account'] != (self.account or {}).get('id')):
+                return
+            self.queue_snapshot = value
+            old_page = self.queue_page
+            self.queue_page = value.get('page', 0)
+            self.queue_pages = value.get('pages', 1)
+            self.update_pager(force=self.queue_page != old_page)
+            mode = self.queue_filter.currentData()
+            rows = [row for row in value['rows'] if mode == 'all' or (row['state'] == 'done') == (mode == 'downloaded')]
             selected_item = self.table.item(self.table.currentRow(), 0) if self.table.currentRow() >= 0 else None
             selected_message = selected_item.data(Qt.ItemDataRole.UserRole) if selected_item else None
             self.table.blockSignals(True)
             scroll = self.table.verticalScrollBar().value()
-            self.table.setRowCount(len(value['rows']))
+            self.table.setRowCount(len(rows))
             self.queue_rows = {}
-            self.queue_jobs = {row['message']: dict(row) for row in value['rows']}
-            for index, row in enumerate(value['rows']):
+            self.queue_jobs = {row['message']: dict(row) for row in rows}
+            for index, row in enumerate(rows):
                 self.queue_rows[row['message']] = index
                 status = {'queued': 'Queued', 'downloading': 'Downloading', 'done': 'Completed', 'error': 'Failed'}.get(row['state'], row['state'])
                 verification = row.get('verification', 'pending')
@@ -827,7 +992,7 @@ class Window(QMainWindow):
                 self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff'}.get(row['state'], '#a6b6cc')))
                 if row['state'] == 'done' and verification != 'ok':
                     self.table.item(index, 3).setForeground(QColor('#ff9a9d' if verification in {'error', 'quarantined'} else '#e8c77f'))
-            self.table.verticalScrollBar().setValue(scroll)
+            self.table.verticalScrollBar().setValue(scroll if self.queue_page == old_page else 0)
             if selected_message in self.queue_rows:
                 self.table.setCurrentCell(self.queue_rows[selected_message], 0)
             else:
@@ -838,8 +1003,6 @@ class Window(QMainWindow):
                 index = self.queue_rows.get(self.current_job['message'])
                 if index is not None:
                     self.file_status.setText(self.table.item(index, 3).text())
-            if value['summary']['total'] > 1000:
-                self.queue_caption.setText(self.queue_caption.text() + ' · first 1,000 shown')
         elif name == 'scan':
             self.footer.setText(f'Scanning history · {value:,} new messages checked · ZIP and RAR files added automatically')
         elif name == 'qr':
@@ -878,6 +1041,8 @@ class Window(QMainWindow):
             self.close()
         if name in {'transfers', 'progress', 'queue', 'state', 'selected', 'account'}:
             self.render_archive()
+        if name in {'transfers', 'state'}:
+            self.render_active_transfers()
         self.update_controls()
 
     def tick(self):
@@ -921,7 +1086,8 @@ class Window(QMainWindow):
             rows.append({'message': i + 1, 'name': name, 'size': int(size * 1024**2), 'done': int(done * 1024**2), 'state': state, 'path': name, 'error': '',
                          'verification': 'ok' if i == 0 else 'checking' if i == 1 else 'pending'})
         summary = {'total': len(rows), 'bytes': sum(row['size'] for row in rows), 'received': sum(row['done'] for row in rows), 'complete': 2, 'failed': 0, 'verified': 1, 'quarantined': 0}
-        self.on_event('queue', {'rows': rows, 'summary': summary})
+        self.demo_rows, self.demo_summary = rows, summary
+        self.render_demo_queue()
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
