@@ -1,5 +1,7 @@
 """Single-entry launcher. Standard library only; installs into a private venv."""
 import importlib.metadata
+import json
+import uuid
 import os
 import queue
 import subprocess
@@ -9,11 +11,12 @@ import threading
 import venv
 from pathlib import Path
 
+WINDOWS = os.name == 'nt'
 ROOT = Path(__file__).resolve().parent
-ENV = ROOT / '.venv'
-PYTHON = ENV / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+ENV = ROOT / ('.venv-py314' if WINDOWS else '.venv')
+PYTHON = ENV / ('Scripts/python.exe' if WINDOWS else 'bin/python')
 PYTHONW = ENV / 'Scripts/pythonw.exe'
-FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+FLAGS = subprocess.CREATE_NO_WINDOW if WINDOWS else 0
 
 
 def runtime_error():
@@ -22,7 +25,7 @@ def runtime_error():
     if sys.implementation.name != 'cpython':
         return 'Please use standard CPython from python.org.'
     if not (3, 11) <= sys.version_info[:2] <= (3, 15):
-        return 'Please install Python 3.15 (64-bit). Supported Python versions: 3.11-3.15.'
+        return 'Please install Python 3.14 (64-bit). Supported Python versions: 3.11-3.15.'
     if sys.version_info.releaselevel != 'final':
         return 'Please use a stable Python release, not an alpha, beta, or release candidate.'
     if struct.calcsize('P') != 8:
@@ -54,6 +57,9 @@ from bootstrap import runtime_error, required_packages
 from pathlib import Path
 if runtime_error():
     raise SystemExit(1)
+import sys
+if sys.platform == 'win32' and sys.version_info[:2] != (3, 14):
+    raise SystemExit(1)
 for name, version in required_packages(Path('requirements.txt').read_text()):
     assert m.version(name) == version
     if name == 'cryptg':
@@ -71,17 +77,71 @@ import PySide6.QtWidgets, telethon, qrcode
     return result.returncode == 0
 
 
+def windows_launcher(args):
+    """Use the same self-contained launcher after updates, even from old Python."""
+    environment = os.environ.copy()
+    environment['TD_START_FILE'] = str(ROOT / 'Start.bat')
+    environment['TD_PREFERRED_PYTHON'] = str(getattr(sys, '_base_executable', sys.executable))
+    environment['TD_LAUNCH_ARGS'] = json.dumps(args)
+    environment.pop('TD_RUNTIME_READY', None)
+    command = "$s=[IO.File]::ReadAllText($env:TD_START_FILE); & ([ScriptBlock]::Create(($s -split '(?m)^# POWERSHELL_BEGIN\\r?\\n',2)[1]))"
+    powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    return subprocess.run([str(powershell), '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                           '-Command', command], cwd=ROOT, env=environment).returncode
+
+
+def app_running():
+    from updater import process_alive
+    lock = Path(os.environ.get('LOCALAPPDATA', '')) / 'TelegramZipDesktop/app.lock'
+    try:
+        return process_alive(int(lock.read_text(encoding='utf-8').splitlines()[0]))
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def environment_runtime_ready():
+    if not PYTHON.exists():
+        return False
+    try:
+        code = 'import sys; assert sys.version_info[:2] == (3, 14)' if WINDOWS else 'import sys'
+        return subprocess.run([str(PYTHON), '-I', '-c', code], capture_output=True,
+                              creationflags=FLAGS, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def prepare_environment():
+    if environment_runtime_ready():
+        return
+    if ENV.exists():
+        # Retain a broken environment for recovery; never touch user data.
+        ENV.rename(ENV.with_name(ENV.name + '.previous-' + uuid.uuid4().hex))
+    venv.EnvBuilder(with_pip=True).create(ENV)
+
+
 def launch():
     from updater import startup_ready
     if not startup_ready(ROOT):
         return
-    interpreter = PYTHONW if os.name == 'nt' and PYTHONW.exists() else PYTHON
+    interpreter = PYTHONW if WINDOWS and PYTHONW.exists() else PYTHON
     with open(ROOT / 'startup.log', 'a', encoding='utf-8') as log:
+        environment = os.environ.copy()
+        for key in ('TD_RUNTIME_READY', 'TD_PREFERRED_PYTHON', 'TD_START_FILE', 'TD_LAUNCH_ARGS'):
+            environment.pop(key, None)
         subprocess.Popen([str(interpreter), '-m', 'tgzip', *sys.argv[1:]], cwd=ROOT,
-                         stdout=log, stderr=log, creationflags=FLAGS)
+                         stdout=log, stderr=log, creationflags=FLAGS, env=environment)
 
 
 def main():
+    if WINDOWS and '--check-python' not in sys.argv[1:]:
+        from updater import startup_ready
+        if not startup_ready(ROOT):
+            return 0
+        if app_running():
+            print('Telegram Archive Desktop is already running. Use the existing window.')
+            return 0
+        if os.environ.get('TD_RUNTIME_READY') != '1' or sys.version_info[:2] != (3, 14):
+            return windows_launcher(sys.argv[1:])
     problem = runtime_error()
     if problem:
         print(problem)
@@ -99,11 +159,12 @@ def main():
         lock.write(b'0')
         lock.flush()
     lock.seek(0)
-    if os.name == 'nt':
+    if WINDOWS:
         import msvcrt
         try:
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
+            lock.close()
             print('Setup is already running. Please wait for the existing window.')
             return 0
     try:
@@ -144,8 +205,7 @@ def setup_window():
     def setup():
         try:
             events.put(('status', 'Creating the private Python environment…'))
-            if not PYTHON.exists():
-                venv.EnvBuilder(with_pip=True).create(ENV)
+            prepare_environment()
             events.put(('status', 'Downloading and installing application libraries…'))
             with open(ROOT / 'setup.log', 'w', encoding='utf-8') as log:
                 completed = subprocess.run([str(PYTHON), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=cryptg',

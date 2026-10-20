@@ -6,12 +6,11 @@ A standalone Windows application for downloading ZIP and RAR attachments from Te
 
 ## Start here
 
-1. Install **Python 3.14, 64-bit**, from [python.org](https://www.python.org/downloads/windows/). Keep the Python launcher and Tcl/Tk options enabled. Enable **Add python.exe to PATH**. Python 3.11–3.15 is supported; 3.14 is recommended for native download acceleration.
-2. Extract the entire project into a writable folder, for example `C:\TelegramDownloader`. Do not run directly inside a ZIP or place it in `Program Files`.
-3. Double-click **`Start.bat`**. This is the only launch file you need. First-time setup checks and installs pinned dependencies into a private `.venv`. It opens the application automatically when ready.
-4. Open **API settings**, enter your API ID and API Hash, then click **Save**. Get them from [Telegram API development tools](https://my.telegram.org/apps).
-5. In Telegram on your phone, open **Settings → Devices → Link Desktop Device** and scan the displayed QR code. If requested, enter your two-step verification password in the application.
-6. Choose a group or channel, choose a download folder, click **Scan archives**, then **Start**. Up to **20 archives download simultaneously** by default. Use **Parallel downloads** in the sidebar to choose 1–20; the setting is remembered. Stop the queue before changing it.
+1. Extract the entire project into a writable folder, for example `C:\TelegramDownloader`. Do not run directly inside a ZIP or place it in `Program Files`.
+2. Double-click **`Start.bat`**. This is the only launch file you need. It finds a suitable Python 3.14 or downloads an official private runtime automatically, then installs the dependencies and opens the app. No manual Python installation or administrator rights are needed.
+3. Open **API settings**, enter your API ID and API Hash, then click **Save**. Get them from [Telegram API development tools](https://my.telegram.org/apps).
+4. In Telegram on your phone, open **Settings → Devices → Link Desktop Device** and scan the displayed QR code. If requested, enter your two-step verification password in the application.
+5. Choose a group or channel, choose a download folder, click **Scan archives**, then **Start**. Up to **20 archives download simultaneously** by default. Use **Parallel downloads** in the sidebar to choose 1–20; the setting is remembered. Stop the queue before changing it.
 
 The selected chat is remembered for each account and restored next time. The chat selector stays available during scanning, downloading, and pauses. Switching chats safely stops the current operation, retains its partial files, and opens the other chat's saved queue. **Downloads never start automatically on launch or chat selection.**
 
@@ -21,7 +20,7 @@ For a desktop shortcut, right-click `Start.bat` → **Show more options → Send
 
 The launcher installs **cryptg 0.6.0** automatically on Python 3.11–3.14 and checks that Telethon uses it. This accelerates encryption/decryption; actual download speed still depends on Telegram, the connection, and disk activity. The Activity log reports the active encryption backend.
 
-cryptg has no ready-made CPython 3.15 wheel in this release, so Python 3.15 remains supported with Telethon's existing backend and the progress optimizations below. No compiler is installed. For new environments, Start.bat prefers Python 3.14 when available; existing environments are preserved. See the user guide to switch an existing environment safely.
+The normal Windows launcher automatically uses Python 3.14 with cryptg in `.venv-py314`, including when upgrading from a Python 3.15 environment. The old `.venv` is retained. If Python 3.14 is missing, the official full runtime is downloaded to `%LOCALAPPDATA%\TelegramZipDesktop\runtime` and checked against a pinned SHA-256 before use. System Python, PATH, file associations, credentials, and downloads are unchanged. Source development on Python 3.11–3.15 remains supported.
 
 Intermediate download progress is batched into one database transaction about once per second for all transfers. Combined statistics refresh about four times per second, instead of rescanning the queue for every file callback. Completion and stop/error state changes commit the latest progress immediately; pause and orderly shutdown also flush pending checkpoints. Resume still uses the actual `.part` file length, so a stale display checkpoint cannot cause the whole file to restart.
 
@@ -38,7 +37,7 @@ Intermediate download progress is batched into one database transaction about on
 - API credentials **and the Telegram authorization session** encrypted with Windows DPAPI. No plaintext session file is written by the application.
 - Optional import of the old `telegram_config.json` and `telegram_zip_session.session`.
 - One running instance per Windows user; orderly worker shutdown when the window closes.
-- Automated tests and a Windows GitHub Actions workflow for Python 3.11–3.15.
+- Automated tests and a manually started Windows GitHub Actions workflow for Python 3.11–3.15. Pushes do not launch it or generate failure-notification emails from this workflow.
 
 ## Archive checks and upgrading
 
@@ -69,4 +68,4 @@ The app uses the permissions of your own Telegram account. It does not join grou
 
 Archives are not extracted or executed. A completed download is **Unchecked** until WinRAR successfully tests it. **Verified** means the archive passed a password-free WinRAR test; it is not an antivirus or authenticity check. Known multipart `.partNN.rar` sets require manual validation with all volumes present.
 
-This is a source distribution with a launcher, **not a signed Windows EXE installer**. Python is a prerequisite; Python itself is not installed automatically. Setup downloads the application libraries from PyPI. Actual Telegram login and downloading require your account and have not been exercised against a real account in the development environment. See the validation document for precise test coverage.
+This is a source distribution with a launcher, **not a signed Windows EXE installer**. The launcher downloads an official private Python runtime when required and application libraries from PyPI. First-time setup requires internet access and Windows PowerShell; subsequent healthy launches reuse the prepared environment. Actual Telegram login and downloading require your account and have not been exercised against a real account in the development environment. See the validation document for precise test coverage.

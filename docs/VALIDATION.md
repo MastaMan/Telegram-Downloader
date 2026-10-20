@@ -1,5 +1,17 @@
 # Validation and release limits
 
+## Automatic Python preparation and manual CI — 20 October 2026
+
+The Windows entry point now selects standard Python 3.14 or downloads the official full CPython 3.14.8 x64 runtime ZIP into per-user application storage. The published SHA-256 was read from the [official Windows release manifest](https://www.python.org/ftp/python/3.14.8/windows-3.14.8.json). A real download was verified against `4873947a8afc037846b180312b83c744a4146a851cfd316a75c3125a4d8299da`; its 2,203 entries include python.exe, pythonw.exe, venv, ensurepip, and tkinter. The Windows binaries were inspected, not executed on macOS.
+
+A portable PowerShell 7.6.7 runtime executed seven offline launcher tests: real parsing, hashing, extraction, publication, hash rejection, failed download cleanup, previous-runtime preservation, installed-runtime reuse, exclusive setup locking, and the actual bootstrap-to-PowerShell call with quoted paths/arguments. These tests replace Windows executable probes and network responses with fixtures. Additional Python tests cover automatic handoff from 3.15, preventing setup while the app is running, preservation of the old environment and queue fixtures, and reuse of a healthy environment.
+
+The final full suite ran **126 tests per runtime**, on Python **3.12.3**, **3.14.8**, and **3.15.0** with the portable PowerShell tests enabled. Python 3.12/3.14 passed 125 tests and skipped Windows DPAPI; Python 3.15 passed 124 and skipped Windows DPAPI plus the unavailable cryptg wheel. Actual Windows PowerShell 5.1, the Windows Python runtime, and a real Telegram account still need acceptance testing.
+
+Windows acceptance: on a machine without Python, run Start.bat and confirm the official runtime and dependencies are prepared without administrator rights. Repeat with an old Python 3.15 `.venv` and a saved Telegram queue: verify the new `.venv-py314` is used, the old environment is retained, and saved downloads resume. Repeat offline after successful setup to confirm no Python download is attempted. Test a failed initial download and retry, two simultaneous launches, and Check updates from an older version. Verify no system PATH/file associations change.
+
+The Actions workflow is now **manual only** (`workflow_dispatch`). Pushes no longer schedule Windows validation, preventing the automatic failure-email cycle requested by the owner. Tests remain available locally and through manual Actions runs; account-wide notification settings and billing were not changed.
+
 ## Native cryptography and batched progress — 20 October 2026
 
 The source passed the full **114-test** suite on macOS with Python **3.12.3** and **3.14.8** (113 passed, Windows DPAPI skipped), and **3.15.0** (112 passed, Windows DPAPI and unavailable cryptg wheel skipped). All processes exited with code 0. The Qt test for progress events without embedded summaries was also rerun successfully after updating that fixture.

@@ -12,3 +12,5 @@ settings.json
 .updates/
 .installed-update.json*
 .update-pending.json*
+.venv-py314/
+.venv-py314.previous-*/

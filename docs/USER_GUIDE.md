@@ -2,8 +2,7 @@
 
 ## 1. System requirements
 
-- Windows 10 or 11, x64, with 64-bit Python 3.11–3.15. Standard CPython 3.14 is recommended for cryptg acceleration; free-threaded builds and pre-releases are not supported.
-- Python's standard Tcl/Tk component, used for the first-time setup window.
+- Windows 10 or 11, x64, with Windows PowerShell available. Python is prepared automatically; you do not need to install it manually.
 - An internet connection, access to Telegram, and enough space for the dependencies and downloaded archives. Allow roughly 1 GB for setup, in addition to your downloads.
 - A Telegram account already authorized in the official mobile app and already able to open the required group or channel.
 - Your own API ID and API Hash from `https://my.telegram.org/apps`.
@@ -14,15 +13,13 @@ The application is independent of 3ds Max. It runs as a normal desktop program.
 
 Extract **all files** into a writable directory, such as `C:\TelegramDownloader`. Avoid very long paths. Double-click **Start.bat** every time you want to open the app.
 
-The launcher checks installed Python versions in this order: 3.14, 3.15, 3.13, 3.12, then 3.11. Python 3.14 takes priority for new environments because cryptg currently has a ready-made wheel for it. It skips unsupported builds using the Windows Python launcher. It falls back to `python` on PATH. An unsupported or 32-bit interpreter produces an explanatory error. If Python is missing, the official Windows download page opens; install Python and run Start.bat again.
+The launcher looks for standard 64-bit Python 3.14 with Tcl/Tk, venv, and ensurepip. It checks the existing application environment, private runtime, Windows Python launcher, and PATH. If none is suitable, it downloads the official full Python 3.14.8 x64 ZIP from python.org, verifies its pinned SHA-256, and prepares it under `%LOCALAPPDATA%\TelegramZipDesktop\runtime`. No administrator access, system Python replacement, or PATH change is needed. The first download shows progress in the launch window.
 
-Use standard 64-bit CPython. Alpha/beta/RC versions and free-threaded builds are not supported by this application. The launcher checks interpreter compatibility before choosing a version.
+The application dependencies, including cryptg, are installed into `.venv-py314` inside the project. On an update from an older environment, this happens automatically. The old `.venv` is kept. Account credentials, selected chat, queue, downloads, and partial files stay where they are. The same runtime preparation runs after **Check updates**, even if the old app used Python 3.15.
 
-When updating from the original release, keep your application data and downloaded files. Run Start.bat to update the GUI dependencies automatically. An existing supported `.venv` can continue using its original Python version. To enable cryptg when the existing environment uses Python 3.15, close the app, install standard Python 3.14 x64, rename only the project's `.venv` folder to `.venv.previous`, and run Start.bat. The launcher creates a new environment with 3.14 when the Windows Python launcher detects it. Keep the old folder until the new environment works. Python 3.15 remains supported if 3.14 is unavailable. Do the same if the old Python installation was removed. Credentials and the queue remain in Local AppData, outside `.venv`.
+Once prepared, the runtime and environment are reused. Launching again does not download Python each time. If Python download verification or dependency installation fails, setup reports the error; check the connection and run Start.bat again. A broken managed environment is renamed to `.venv-py314.previous-…` before rebuilding, so its contents are retained. An incomplete runtime download is never used.
 
-On first launch, a setup window creates `.venv`, checks dependencies, and installs the required pinned versions. No administrator rights are required. Later launches check the environment and normally go straight to the application. A console window may briefly appear while Start.bat prepares the launch.
-
-Do not move the project while it is running. If you move it later and the environment no longer works, close the app, remove only the project's `.venv` directory, and run Start.bat to recreate it. Your credentials and queue live separately under Local AppData.
+Keep the project in a writable folder and do not move it while it is running. If you move it later and setup cannot repair the environment automatically, close the app, rename `.venv-py314` to `.venv-py314.previous-manual`, and run Start.bat. Leave `%LOCALAPPDATA%\TelegramZipDesktop` and your downloads intact.
 
 You may create one Windows desktop shortcut to Start.bat using the **Send to → Desktop (create shortcut)** menu. You do not need separate download and QR-login launchers.
 
@@ -215,6 +212,6 @@ The first version containing Check updates must be installed manually over older
 
 ## Download acceleration
 
-On Python 3.11–3.14, Start.bat installs cryptg automatically and checks that Telethon uses it. After an update, the dependency setup may appear once. Activity reports `cryptg acceleration enabled`, native OpenSSL acceleration, or the Python fallback. Python 3.15 currently has no ready-made cryptg wheel; it remains supported without requiring Rust or a C compiler.
+On Python 3.11–3.14, Start.bat installs cryptg automatically and checks that Telethon uses it. After an update, the dependency setup may appear once. Activity reports `cryptg acceleration enabled`, native OpenSSL acceleration, or the Python fallback. The normal Windows launch path automatically selects or prepares Python 3.14 for cryptg. You do not need Rust or a C compiler.
 
 Intermediate progress is saved in batches about once per second. Pause, stop, completion, errors, and orderly exit preserve checkpoints. Displayed progress includes bytes not yet committed to the database. Actual partial files remain the authority for resuming after an interruption. The total speed/progress refreshes about four times per second, independently of individual file callbacks.

@@ -2,6 +2,9 @@
 from collections import namedtuple
 from pathlib import Path
 import struct
+import os
+import tempfile
+import json
 import subprocess
 import sys
 import unittest
@@ -93,9 +96,69 @@ class BootstrapTests(unittest.TestCase):
             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_windows_update_from_python315_returns_through_runtime_selector(self):
+        with patch.object(bootstrap, 'WINDOWS', True), \
+             patch.object(sys, 'argv', ['bootstrap.py']), \
+             patch.object(sys, 'version_info', Version(3, 15, 0, 'final', 0)), \
+             patch.dict(os.environ, {'TD_RUNTIME_READY': '1'}), \
+             patch('updater.startup_ready', return_value=True), \
+             patch.object(bootstrap, 'app_running', return_value=False), \
+             patch.object(bootstrap, 'windows_launcher', return_value=0) as launcher:
+            self.assertEqual(bootstrap.main(), 0)
+            launcher.assert_called_once_with([])
+
+    def test_running_app_prevents_environment_setup(self):
+        with patch.object(bootstrap, 'WINDOWS', True), \
+             patch.object(sys, 'argv', ['bootstrap.py']), \
+             patch('updater.startup_ready', return_value=True), \
+             patch.object(bootstrap, 'app_running', return_value=True), \
+             patch.object(bootstrap, 'windows_launcher') as launcher, \
+             patch.object(bootstrap, 'setup_window') as setup, patch('builtins.print'):
+            self.assertEqual(bootstrap.main(), 0)
+            launcher.assert_not_called()
+            setup.assert_not_called()
+
+    def test_runtime_selector_passes_paths_and_arguments_as_environment_data(self):
+        with patch.object(bootstrap.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            self.assertEqual(bootstrap.windows_launcher(['--screenshot', "folder's image.png"]), 0)
+            environment = run.call_args.kwargs['env']
+            self.assertEqual(json.loads(environment['TD_LAUNCH_ARGS']), ['--screenshot', "folder's image.png"])
+            self.assertNotIn('TD_RUNTIME_READY', environment)
+            self.assertNotIn("folder's image.png", run.call_args.args[0][-1])
+            self.assertIn('POWERSHELL_BEGIN', run.call_args.args[0][-1])
+
+    def test_new_environment_preserves_previous_environment_and_user_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = root / '.venv'
+            previous.mkdir()
+            (previous / 'fixture').write_text('old runtime')
+            new = root / '.venv-py314'
+            new.mkdir()
+            (new / 'broken').write_text('keep for recovery')
+            data = root / 'queue.sqlite3'
+            data.write_bytes(b'untouched fixture')
+            with patch.object(bootstrap, 'ENV', new), \
+                 patch.object(bootstrap, 'environment_runtime_ready', return_value=False), \
+                 patch.object(bootstrap.venv, 'EnvBuilder') as builder:
+                bootstrap.prepare_environment()
+                builder.return_value.create.assert_called_once_with(new)
+            self.assertEqual((previous / 'fixture').read_text(), 'old runtime')
+            backups = list(root.glob('.venv-py314.previous-*'))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual((backups[0] / 'broken').read_text(), 'keep for recovery')
+            self.assertEqual(data.read_bytes(), b'untouched fixture')
+
+    def test_healthy_environment_is_reused(self):
+        with patch.object(bootstrap, 'environment_runtime_ready', return_value=True), \
+             patch.object(bootstrap.venv, 'EnvBuilder') as builder:
+            bootstrap.prepare_environment()
+            builder.assert_not_called()
+
     def test_installed_pinned_dependencies_load_in_a_subprocess(self):
         with patch.object(bootstrap, 'PYTHON', Path(sys.executable)):
-            self.assertTrue(bootstrap.check_environment())
+            self.assertEqual(bootstrap.check_environment(), not (os.name == 'nt' and sys.version_info[:2] != (3, 14)))
 
 
 if __name__ == '__main__':
