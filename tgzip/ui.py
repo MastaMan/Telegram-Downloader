@@ -213,6 +213,40 @@ def card():
     return widget, layout
 
 
+class SettingsPanel(QWidget):
+    """Reflow the same live settings cards between one and two columns."""
+
+    def __init__(self, cards):
+        super().__init__()
+        self.cards = cards
+        self.columns = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 4, 0)
+        self.grid.setSpacing(10)
+        for widget in cards:
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.reflow()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reflow()
+
+    def reflow(self):
+        columns = 2 if self.width() >= 640 else 1
+        if columns == self.columns:
+            return
+        self.columns = columns
+        for widget in self.cards:
+            self.grid.removeWidget(widget)
+        for row in range(len(self.cards) + 1):
+            self.grid.setRowStretch(row, 0)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1 if columns == 2 else 0)
+        for index, widget in enumerate(self.cards):
+            self.grid.addWidget(widget, index // columns, index % columns, Qt.AlignmentFlag.AlignTop)
+        self.grid.setRowStretch((len(self.cards) + columns - 1) // columns, 1)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -395,12 +429,6 @@ class Window(QMainWindow):
         page.addLayout(header)
         body = self.body_layout = QHBoxLayout()
         body.setSpacing(8)
-        sidebar = QVBoxLayout()
-        sidebar.setSpacing(8)
-        sidebar_widget = QWidget()
-        sidebar_widget.setLayout(sidebar)
-        sidebar_widget.setFixedWidth(228)
-        sidebar.setContentsMargins(0, 0, 0, 0)
         account_card, account_layout = card()
         self.account_name = ElidedLabel('Connect Telegram', 'section')
         account_layout.addWidget(self.account_name)
@@ -416,7 +444,6 @@ class Window(QMainWindow):
         account_actions.addWidget(self.logout_btn)
         account_actions.addWidget(self.settings_btn)
         account_layout.addLayout(account_actions)
-        sidebar.addWidget(account_card)
         source_card, source_layout = card()
         source_layout.addWidget(label('Groups & channels', 'section'))
         self.chat_box = ArrowComboBox()
@@ -432,9 +459,9 @@ class Window(QMainWindow):
         self.chat_box.setToolTip('Your last selection is remembered. Switch chats at any time.')
         self.refresh_btn = button('Refresh chats', lambda: self.send('refresh'))
         source_layout.addWidget(self.refresh_btn)
-        sidebar.addWidget(source_card)
         dest_card, dest_layout = card()
         dest_layout.addWidget(label('Settings', 'section'))
+        dest_layout.addWidget(label('Download folder', 'muted'))
         self.folder_label = ElidedLabel('Choose a download folder', 'section')
         dest_layout.addWidget(self.folder_label)
         self.folder_btn = button('Choose…', self.choose_folder)
@@ -444,8 +471,12 @@ class Window(QMainWindow):
         self.open_btn.setToolTip('Open the archive folder for the selected chat.')
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
-        parallel_row = QHBoxLayout()
-        parallel_row.addWidget(label('Parallel downloads', 'muted'))
+        limits = QFormLayout()
+        limits.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        limits.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        limits.setHorizontalSpacing(10)
+        limits.setVerticalSpacing(8)
+        limits.setContentsMargins(0, 4, 0, 0)
         self.parallel_box = ArrowComboBox()
         for count in range(1, 21):
             self.parallel_box.addItem(str(count), count)
@@ -453,19 +484,17 @@ class Window(QMainWindow):
         self.parallel_box.setToolTip('Change the limit live. Increasing starts more files; decreasing lets active files finish. Paused downloads wait for Resume.')
         self.parallel_box.currentIndexChanged.connect(
             lambda: self.send('parallel', value=self.parallel_box.currentData()))
-        parallel_row.addWidget(self.parallel_box)
-        dest_layout.addLayout(parallel_row)
-        speed_row = QHBoxLayout()
-        speed_row.addWidget(label('Speed limit', 'muted'))
+        self.parallel_box.setMinimumWidth(106)
+        limits.addRow(label('Parallel downloads', 'muted'), self.parallel_box)
         self.speed_box = ArrowComboBox()
         for limit in SPEED_LIMITS:
             self.speed_box.addItem('Unlimited' if not limit else f'{limit:g} MB/s', limit)
         self.speed_box.setToolTip('Total download speed across all files. Changes apply while downloading.')
         self.speed_box.currentIndexChanged.connect(
             lambda: self.send('speed_limit', value=self.speed_box.currentData()))
-        speed_row.addWidget(self.speed_box)
-        dest_layout.addLayout(speed_row)
-        sidebar.addWidget(dest_card)
+        self.speed_box.setMinimumWidth(106)
+        limits.addRow(label('Speed limit', 'muted'), self.speed_box)
+        dest_layout.addLayout(limits)
         check_card, checks = card()
         checks.addWidget(label('Archive checks', 'section'))
         self.checker_label = ElidedLabel('WinRAR not configured', 'muted')
@@ -478,19 +507,21 @@ class Window(QMainWindow):
         check_actions.addWidget(self.checker_btn)
         check_actions.addWidget(self.verify_btn)
         checks.addLayout(check_actions)
-        sidebar.addWidget(check_card)
-        sidebar.addStretch()
+        self.settings_panel = SettingsPanel([account_card, source_card, dest_card, check_card])
         self.sidebar_scroll = QScrollArea()
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sidebar_scroll.setWidgetResizable(True)
         self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sidebar_scroll.setFixedWidth(240)
-        self.sidebar_scroll.setWidget(sidebar_widget)
+        self.sidebar_scroll.setWidget(self.settings_panel)
         body.addWidget(self.sidebar_scroll)
         self.panel_dialog = QDialog(self)
         self.panel_dialog.setWindowTitle('Settings')
-        self.panel_dialog.resize(280, 560)
+        self.panel_dialog.resize(480, 600)
+        self.panel_dialog.setMinimumSize(320, 340)
         self.panel_layout = QVBoxLayout(self.panel_dialog)
+        self.panel_layout.setContentsMargins(12, 12, 12, 12)
+        self.panel_layout.setSpacing(10)
         panel_close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         panel_close.rejected.connect(self.panel_dialog.reject)
         self.panel_layout.addWidget(panel_close)
@@ -669,12 +700,15 @@ class Window(QMainWindow):
             self.panel_dialog.raise_()
             return
         self.body_layout.removeWidget(self.sidebar_scroll)
+        self.sidebar_scroll.setMinimumWidth(0)
+        self.sidebar_scroll.setMaximumWidth(16777215)
         self.panel_layout.insertWidget(0, self.sidebar_scroll, 1)
         self.sidebar_scroll.show()
         self.panel_dialog.show()
 
     def restore_panel(self):
         self.panel_layout.removeWidget(self.sidebar_scroll)
+        self.sidebar_scroll.setFixedWidth(240)
         self.body_layout.insertWidget(0, self.sidebar_scroll)
         self.apply_window_layout()
 

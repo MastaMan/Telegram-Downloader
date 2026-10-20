@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Patch release 1.0.2: responsive Settings — 20 October 2026
+
+The final 1.0.2 candidate passed the Python 3.14 environment probe, bytecode compilation, whitespace checks, and the full 192-test suite below. Header and window-title version checks passed; main-window previews at 900×600 and 500×340 were inspected and the documentation preview was refreshed. The Windows workflow remains manual-only.
+
+Removed the fixed-width content inside the Settings dialog. Cards now fill its width, reflow into two columns in wide windows, and retain aligned top edges and consistent spacing. Limit fields use a wrapping form. The dialog starts at 480×600, supports 320×340, and keeps Close outside the vertical scrolling area. The docked sidebar remains 240 pixels wide.
+
+Python **3.14.8** on macOS: **192 tests**, 191 passed and one skipped (Windows DPAPI), with portable PowerShell enabled for launcher tests. New GUI coverage resizes repeatedly between narrow and wide layouts, checks card alignment and control bounds, ensures lower controls are reachable by scrolling, and verifies that chat/parallel/speed values survive resizing and moving the panel back to the sidebar. Offscreen previews were inspected at 480×600, 760×480, and 320×340, including the lower scrolled section. Real Windows rendering and live Telegram behavior were not tested for this change.
+
 ## Patch release 1.0.1 — 20 October 2026
 
 This release includes compact 900×600 startup, consistent dark scrollbars, selected-chat archive folder access from **Open**, and the documented default patch-version policy. The header and window title both display **v1.0.1**.

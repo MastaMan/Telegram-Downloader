@@ -148,6 +148,62 @@ class UITests(unittest.TestCase):
         self.assertFalse(window.panel_dialog.isVisible())
         self.assertFalse(window.activity_dialog.isVisible())
 
+    def test_settings_cards_reflow_without_clipping_or_resetting_controls(self):
+        window = Window(demo=True)
+        window.show()
+        window.show_panel()
+        selected_chat = window.chat_box.currentData()
+        window.parallel_box.setCurrentIndex(6)
+        window.speed_box.setCurrentIndex(3)
+        for width, height, columns in ((480, 600, 1), (760, 480, 2), (320, 340, 1), (760, 600, 2)):
+            window.panel_dialog.resize(width, height)
+            for _ in range(8):
+                self.app.processEvents()
+            self.assertEqual((window.panel_dialog.width(), window.panel_dialog.height()), (width, height))
+            self.assertEqual(window.settings_panel.columns, columns)
+            self.assertEqual(window.sidebar_scroll.horizontalScrollBar().maximum(), 0)
+            cards = window.settings_panel.cards
+            if columns == 2:
+                self.assertEqual(cards[0].y(), cards[1].y())
+                self.assertEqual(cards[2].y(), cards[3].y())
+                self.assertLessEqual(abs(cards[0].width() - cards[1].width()), 1)
+            else:
+                self.assertGreater(cards[1].y(), cards[0].geometry().bottom())
+            for card in cards:
+                self.assertGreaterEqual(card.x(), 0)
+                self.assertLessEqual(card.geometry().right(), window.settings_panel.width())
+            for widget in (window.chat_box, window.parallel_box, window.speed_box,
+                           window.folder_btn, window.open_btn, window.checker_btn, window.verify_btn):
+                parent = widget.parentWidget()
+                self.assertTrue(parent.rect().contains(widget.geometry()), widget.objectName())
+                if isinstance(widget, QPushButton):
+                    self.assertGreaterEqual(widget.width(), widget.fontMetrics().horizontalAdvance(widget.text()) + 12)
+            self.assertEqual(window.chat_box.currentData(), selected_chat)
+            self.assertEqual(window.parallel_box.currentIndex(), 6)
+            self.assertEqual(window.speed_box.currentIndex(), 3)
+        window.panel_dialog.resize(320, 340)
+        for _ in range(5):
+            self.app.processEvents()
+        self.assertGreater(window.sidebar_scroll.verticalScrollBar().maximum(), 0)
+        window.sidebar_scroll.ensureWidgetVisible(window.verify_btn)
+        self.app.processEvents()
+        viewport = window.sidebar_scroll.viewport()
+        position = window.verify_btn.mapTo(viewport, window.verify_btn.rect().topLeft())
+        self.assertGreaterEqual(position.y(), 0)
+        self.assertLessEqual(position.y() + window.verify_btn.height(), viewport.height())
+        window.panel_dialog.close()
+        window.resize(1000, 680)
+        for _ in range(5):
+            self.app.processEvents()
+        self.assertEqual(window.sidebar_scroll.width(), 240)
+        self.assertEqual(window.settings_panel.columns, 1)
+        self.assertEqual(window.parallel_box.currentIndex(), 6)
+        window.show_panel()
+        for _ in range(5):
+            self.app.processEvents()
+        self.assertEqual(window.sidebar_scroll.horizontalScrollBar().maximum(), 0)
+        window.close()
+
     def test_open_uses_selected_chat_archive_directory(self):
         window = Window(demo=True)
         with tempfile.TemporaryDirectory() as directory:
