@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QImage,
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
+    QSizePolicy, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
 from .storage import parallel_downloads, speed_limit, SPEED_LIMITS, QUEUE_PAGE_SIZE
@@ -44,6 +44,10 @@ QTableWidget { background: #151f30; alternate-background-color: #182337; border:
 QTableWidget::item { padding: 3px 5px; border-bottom: 1px solid #253147; }
 QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 5px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 8px; padding: 8px; color: #acbdd3; font-size: 12px; }
+QScrollBar:horizontal { background: #131d2e; height: 9px; }
+QScrollBar::handle:horizontal { background: #394b68; min-width: 24px; border-radius: 4px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #131d2e; }
 QScrollBar:vertical { background: #131d2e; width: 9px; }
 QScrollBar::handle:vertical { background: #394b68; min-height: 24px; border-radius: 4px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
@@ -341,8 +345,8 @@ class Window(QMainWindow):
         self.verification_info = None
         self.update_plan = None
         self.setWindowTitle(f'Telegram Archive Desktop v{__version__}' + (' — Preview' if demo else ''))
-        self.resize(1220, 850)
-        self.setMinimumSize(1000, 680)
+        self.resize(960, 640)
+        self.setMinimumSize(500, 340)
         self.setStyleSheet(STYLE)
         self.build_ui()
         self.timer = QTimer(self)
@@ -368,19 +372,22 @@ class Window(QMainWindow):
         header.addWidget(logo)
         title_box = QHBoxLayout()
         title_box.setSpacing(8)
-        title_box.addWidget(label('Telegram Archive Desktop', 'title'))
+        self.title_label = ElidedLabel('Telegram Archive Desktop', 'title')
+        title_box.addWidget(self.title_label, 1)
         self.version_label = label(f'v{__version__}', 'muted')
         self.version_label.setToolTip('Application version')
         title_box.addWidget(self.version_label)
         header.addLayout(title_box)
         header.addStretch()
+        self.panel_btn = button('Settings', self.show_panel)
+        header.addWidget(self.panel_btn)
         self.update_btn = button('Check updates', lambda: self.send('update'))
         self.update_btn.setToolTip('Install the latest GitHub version and restart. Stop active operations first.')
         header.addWidget(self.update_btn)
         self.badge = label('NOT CONNECTED', 'badge')
         header.addWidget(self.badge)
         page.addLayout(header)
-        body = QHBoxLayout()
+        body = self.body_layout = QHBoxLayout()
         body.setSpacing(8)
         sidebar = QVBoxLayout()
         sidebar.setSpacing(8)
@@ -466,14 +473,28 @@ class Window(QMainWindow):
         checks.addLayout(check_actions)
         sidebar.addWidget(check_card)
         sidebar.addStretch()
-        body.addWidget(sidebar_widget)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setFixedWidth(240)
+        self.sidebar_scroll.setWidget(sidebar_widget)
+        body.addWidget(self.sidebar_scroll)
+        self.panel_dialog = QDialog(self)
+        self.panel_dialog.setWindowTitle('Settings')
+        self.panel_dialog.resize(280, 560)
+        self.panel_layout = QVBoxLayout(self.panel_dialog)
+        panel_close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        panel_close.rejected.connect(self.panel_dialog.reject)
+        self.panel_layout.addWidget(panel_close)
+        self.panel_dialog.finished.connect(self.restore_panel)
         content = QVBoxLayout()
         content.setSpacing(6)
         current_card, current = card()
         file_heading = QHBoxLayout()
         self.file_name = ElidedLabel('No active download', 'section')
         file_heading.addWidget(self.file_name, 1)
-        self.file_status = label('Ready', 'muted')
+        self.file_status = ElidedLabel('Ready', 'muted')
         current.addLayout(file_heading)
         self.file_bar = QProgressBar()
         self.file_bar.setObjectName('overall')
@@ -485,7 +506,10 @@ class Window(QMainWindow):
         file_heading.addWidget(self.byte_label, 1)
         file_heading.addWidget(self.percent_label)
         current.addWidget(self.file_bar)
-        metrics = QHBoxLayout()
+        self.metrics_widget = QWidget()
+        self.metrics_widget.setObjectName('transparent')
+        metrics = QHBoxLayout(self.metrics_widget)
+        metrics.setContentsMargins(0, 0, 0, 0)
         self.speed_value, self.eta_value, self.done_value = label('—', 'metric'), label('—', 'metric'), label('0 / 0', 'metric')
         for caption, value in [('Speed', self.speed_value), ('Time left', self.eta_value), ('Downloaded', self.done_value)]:
             column = QHBoxLayout()
@@ -493,14 +517,20 @@ class Window(QMainWindow):
             column.addWidget(label(caption, 'muted'))
             column.addWidget(value)
             metrics.addLayout(column)
-        current.addLayout(metrics)
+        current.addWidget(self.metrics_widget)
         self.active_strip = QWidget()
         self.active_strip.setObjectName('transparent')
         self.active_layout = QHBoxLayout(self.active_strip)
         self.active_layout.setContentsMargins(0, 0, 0, 0)
         self.active_layout.setSpacing(6)
-        self.active_strip.hide()
-        current.addWidget(self.active_strip)
+        self.active_scroll = QScrollArea()
+        self.active_scroll.setObjectName('transparent')
+        self.active_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.active_scroll.setWidgetResizable(True)
+        self.active_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.active_scroll.setWidget(self.active_strip)
+        self.active_scroll.hide()
+        current.addWidget(self.active_scroll)
         controls = QHBoxLayout()
         self.scan_btn = button('Scan archives', lambda: self.send('scan'))
         self.start_btn = button('▶  Start', lambda: self.send('start'), True)
@@ -511,8 +541,7 @@ class Window(QMainWindow):
         self.stop_btn.setToolTip('Stop immediately and keep partial files for the next Start.')
         for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.finish_btn, self.stop_btn):
             controls.addWidget(btn)
-        controls.addStretch()
-        controls.addWidget(self.file_status)
+        controls.addWidget(self.file_status, 1)
         current.addLayout(controls)
         content.addWidget(current_card)
         queue_card, queue = card()
@@ -526,7 +555,7 @@ class Window(QMainWindow):
         self.queue_filter.setToolTip('Filter the saved queue without changing downloads. Downloaded includes unchecked and quarantined archives.')
         self.queue_filter.currentIndexChanged.connect(lambda: self.request_queue_page(0))
         queue_heading.addWidget(self.queue_filter)
-        self.activity_toggle = button('Activity', lambda: self.activity.setVisible(self.activity_toggle.isChecked()))
+        self.activity_toggle = button('Activity', self.toggle_activity)
         self.activity_toggle.setCheckable(True)
         self.activity_toggle.setToolTip('Show or hide the session log.')
         queue_heading.addWidget(self.activity_toggle)
@@ -546,7 +575,7 @@ class Window(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index, width in [(1, 158), (2, 112), (3, 110)]:
             self.table.setColumnWidth(index, width)
-        self.table.setMinimumHeight(200)
+        self.table.setMinimumHeight(60)
         queue.addWidget(self.table, 1)
         paging = QHBoxLayout()
         self.first_page = button('First', lambda: self.request_queue_page(0))
@@ -575,14 +604,77 @@ class Window(QMainWindow):
         self.activity = QPlainTextEdit()
         self.activity.setReadOnly(True)
         self.activity.setMaximumBlockCount(500)
-        self.activity.setFixedHeight(72)
-        self.activity.hide()
+        self.activity_dialog = QDialog(self)
+        self.activity_dialog.setWindowTitle('Activity')
+        self.activity_dialog.resize(480, 280)
+        activity_layout = QVBoxLayout(self.activity_dialog)
+        activity_layout.addWidget(self.activity)
+        self.activity_dialog.finished.connect(lambda: self.activity_toggle.setChecked(False))
         self.activity.setPlaceholderText('Connection, scan, and download updates will appear here.')
-        content.addWidget(self.activity)
         body.addLayout(content, 1)
         page.addLayout(body, 1)
         self.footer = ElidedLabel('Ready', 'muted')
         page.addWidget(self.footer)
+        self.apply_window_layout()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'footer'):
+            self.apply_window_layout()
+
+    def apply_window_layout(self):
+        narrow = self.width() < 900 or self.height() < 540
+        small = self.width() < 700
+        short = self.height() < 500
+        self.panel_btn.setVisible(narrow)
+        if not self.panel_dialog.isVisible():
+            self.sidebar_scroll.setVisible(not narrow)
+        self.badge.setVisible(not narrow)
+        self.title_label.setText('Telegram Archives' if small else 'Telegram Archive Desktop')
+        self.title_label.setFixedWidth(160 if small else 260)
+        self.scan_btn.setText('Scan' if small else 'Scan archives')
+        self.scan_btn.setToolTip('Scan archives in the selected chat.')
+        self.file_status.setVisible(not small)
+        self.metrics_widget.setVisible(not short)
+        self.total_label.setVisible(not short)
+        self.footer.setVisible(not short)
+        self.queue_caption.setVisible(not small)
+        count = len(self.transfer_tiles)
+        strip_width = max(0, count * (40 if small else 32) + (count - 1) * 6)
+        self.active_strip.setMinimumWidth(strip_width)
+        available_width = self.width() - 40 - (248 if not narrow else 0)
+        self.active_scroll.setFixedHeight((28 if short else 48) + (12 if strip_width > available_width else 0))
+        for tile in self.transfer_tiles.values():
+            tile.name.setVisible(not short)
+            tile.setFixedHeight(28 if short else 48)
+        for widget, full, compact in ((self.first_page, 'First', '«'), (self.prev_page, 'Previous', '‹'),
+                                      (self.next_page, 'Next', '›'), (self.last_page, 'Last', '»')):
+            widget.setText(compact if small else full)
+            widget.setToolTip(full + ' page')
+        self.page_number.setFixedWidth(52 if small else 76)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive if small
+                                                         else QHeaderView.ResizeMode.Stretch)
+        if small:
+            self.table.setColumnWidth(0, 180)
+
+    def show_panel(self):
+        if self.panel_dialog.isVisible():
+            self.panel_dialog.raise_()
+            return
+        self.body_layout.removeWidget(self.sidebar_scroll)
+        self.panel_layout.insertWidget(0, self.sidebar_scroll, 1)
+        self.sidebar_scroll.show()
+        self.panel_dialog.show()
+
+    def restore_panel(self):
+        self.panel_layout.removeWidget(self.sidebar_scroll)
+        self.body_layout.insertWidget(0, self.sidebar_scroll)
+        self.apply_window_layout()
+
+    def toggle_activity(self):
+        self.activity_dialog.setVisible(self.activity_toggle.isChecked())
+        if self.activity_toggle.isChecked():
+            self.activity_dialog.raise_()
 
     def boot(self):
         if self.bridge.ready.is_set():
@@ -723,7 +815,8 @@ class Window(QMainWindow):
                 self.transfer_tiles[message] = tile
                 self.active_layout.addWidget(tile, 1)
             self.transfer_tiles[message].update_job(job, paused=self.state == 'paused')
-        self.active_strip.setVisible(bool(self.transfer_tiles))
+        self.active_scroll.setVisible(bool(self.transfer_tiles))
+        self.apply_window_layout()
 
     def update_pager(self, force=False):
         self.page_number.validator().setTop(self.queue_pages)
@@ -1026,6 +1119,8 @@ class Window(QMainWindow):
             self.on_event('speed_reset', None)
 
     def closeEvent(self, event):
+        self.panel_dialog.close()
+        self.activity_dialog.close()
         if self.can_close or self.demo or not self.bridge or not self.bridge.thread.is_alive():
             event.accept()
             return

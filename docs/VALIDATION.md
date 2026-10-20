@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Smaller, responsive window — 20 October 2026
+
+The default window is now 960×640 and the minimum is 500×340 (half the previous minimum width and height). Compact mode moves the existing sidebar controls into Settings on demand, provides horizontal scrolling for crowded active-transfer tiles and narrow queue columns, and abbreviates pagination buttons. Very short layouts hide secondary metrics and filename labels while preserving percentages and tooltips. Activity opens separately. Both auxiliary windows close with the main window.
+
+The full suite ran **189 tests** on macOS with Python **3.14.8** and portable PowerShell: **188 passed**, Windows DPAPI skipped. After the final tile-width adjustment, all **23 UI tests** passed again. Release validation on Python **3.15.0** ran all **189 tests**: **187 passed**, Windows DPAPI and unavailable cryptg skipped. The Python 3.14 interpreter probe and syntax checks also passed. Tests exercise 500×340 in downloading/paused/idle states, access to every main action and pager, a visible queue row, scrolling to the twentieth file's 100%, opening/closing Settings and Activity, restoring the sidebar on enlargement, and closing the main window with both dialogs open. Readable percentages are also checked at 900, 960, and 1000 pixels wide.
+
+The 960×640 default, 500×340 compact/paused layout with twenty transfers, and Settings dialog were visually inspected using real Qt offscreen rendering. The default documentation preview was refreshed. No Windows desktop or live Telegram account was used; Windows acceptance should check display scaling, resize breakpoints, scrollbar interaction, and focus/close behavior of the auxiliary windows.
+
 ## Simpler progress layout — 20 October 2026
 
 Removed the redundant selected-file bar, its heading, and Follow active control. The overall bar and active-transfer tiles remain, with six-pixel gaps between tiles. Percentage text adapts to narrow tiles. The queue receives the space freed by the removed controls.

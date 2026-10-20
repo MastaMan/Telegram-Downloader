@@ -71,6 +71,12 @@ The public commits API identifies a specific main SHA. ZIP installs fetch that S
 
 The UI's update-ready event uses the normal close path. After the worker has stopped, the entry point launches a copied standard-library helper, records an in-progress marker while still holding the app lock, and exits. The helper waits for that PID, obtains the setup lock, applies the update, and restarts through bootstrap. ZIP installation journals the original files before replacement; rollback restores those files on write failure or the next launcher after interruption. Source replacement and dependency setup are separate steps; successful source installation is not rolled back for a later pip failure. Backups remain available under .updates.
 
+## Responsive window
+
+The main window opens at 960×640 with a 500×340 minimum. `apply_window_layout` responds to width and height breakpoints. A scrollable sidebar is moved into a non-modal Settings dialog on demand in compact mode and returned to the main layout when that dialog closes; this reuses live controls and avoids duplicate state or command connections. Activity uses a separate dialog at all sizes. Closing the main window closes both dialogs before shutdown.
+
+The active-transfer strip is hosted in a horizontal scroll area: tiles retain enough width for readable percentages, with scrolling whenever the available row width is insufficient. Short windows hide filename labels and secondary metrics. Narrow queue views use horizontal scrolling to preserve all columns and compact pagination labels. No window-layout change modifies download state, filters, or settings.
+
 ## Run tests
 
 From a terminal in the project directory:

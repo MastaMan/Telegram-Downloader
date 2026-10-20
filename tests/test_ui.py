@@ -42,7 +42,8 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(window.table.rowCount(), 10)
         self.assertFalse(window.activity.isVisible())
-        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 17)
+        self.assertEqual((window.width(), window.height()), (960, 640))
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 9)
         summary = window.transfers_info['summary']
         self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))
         self.assertEqual(window.file_name.text(), '4 active · Limit 20')
@@ -87,6 +88,63 @@ class UITests(unittest.TestCase):
         self.assertEqual((window.width(), window.height()), (1000, 680))
         self.assertEqual(window.footer.toolTip(), window.footer.text())
         window.close()
+
+    def test_half_size_window_keeps_controls_and_scrollable_downloads_accessible(self):
+        window = Window(demo=True)
+        window.show()
+        files = [dict(message=i, name=f'Archive {i}.zip', path=f'{i}.zip', size=100, done=i * 5)
+                 for i in range(1, 21)]
+        window.on_event('transfers', dict(window.transfers_info, files=files, active=20))
+        for state in ('downloading', 'paused', 'idle'):
+            window.on_event('state', state)
+            window.resize(500, 340)
+            for _ in range(5):
+                self.app.processEvents()
+            self.assertEqual((window.width(), window.height()), (500, 340))
+            for widget in (window.panel_btn, window.update_btn, window.scan_btn, window.start_btn,
+                           window.pause_btn, window.finish_btn, window.stop_btn, window.queue_filter,
+                           window.first_page, window.last_page, window.page_number, window.table):
+                self.assertTrue(widget.isVisible())
+                position = widget.mapTo(window, widget.rect().topLeft())
+                self.assertGreaterEqual(position.x(), 0)
+                self.assertGreaterEqual(position.y(), 0)
+                self.assertLessEqual(position.x() + widget.width(), window.width())
+                self.assertLessEqual(position.y() + widget.height(), window.height())
+            self.assertGreaterEqual(window.table.viewport().height(), window.table.rowHeight(0))
+        scroll = window.active_scroll.horizontalScrollBar()
+        self.assertGreater(scroll.maximum(), 0)
+        scroll.setValue(scroll.maximum())
+        self.app.processEvents()
+        last = window.transfer_tiles[20]
+        self.assertEqual(last.percent.text(), '100%')
+        self.assertGreaterEqual(last.percent.width(), last.percent.fontMetrics().horizontalAdvance('100%'))
+        self.assertLessEqual(last.mapTo(window.active_scroll.viewport(), last.rect().topRight()).x(),
+                             window.active_scroll.viewport().width())
+        window.panel_btn.click()
+        self.app.processEvents()
+        self.assertTrue(window.panel_dialog.isVisible())
+        self.assertTrue(window.chat_box.isVisible())
+        self.assertTrue(window.parallel_box.isVisible())
+        window.panel_dialog.close()
+        self.app.processEvents()
+        self.assertFalse(window.sidebar_scroll.isVisible())
+        window.activity_toggle.click()
+        self.app.processEvents()
+        self.assertTrue(window.activity_dialog.isVisible())
+        window.activity_dialog.close()
+        self.assertFalse(window.activity_toggle.isChecked())
+        window.resize(1000, 680)
+        for _ in range(5):
+            self.app.processEvents()
+        self.assertTrue(window.sidebar_scroll.isVisible())
+        self.assertFalse(window.panel_btn.isVisible())
+        self.assertEqual(len(window.transfer_tiles), 20)
+        window.show_panel()
+        window.activity_toggle.click()
+        self.app.processEvents()
+        window.close()
+        self.assertFalse(window.panel_dialog.isVisible())
+        self.assertFalse(window.activity_dialog.isVisible())
 
     def test_demo_process_renders_and_exits_cleanly(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -148,6 +206,13 @@ class UITests(unittest.TestCase):
         tiles = list(window.transfer_tiles.values())
         for left, right in zip(tiles, tiles[1:]):
             self.assertGreaterEqual(right.x() - (left.x() + left.width()), 6)
+        for width in (900, 960, 1000):
+            window.resize(width, 680)
+            for _ in range(3):
+                self.app.processEvents()
+            for active_tile in window.transfer_tiles.values():
+                self.assertGreaterEqual(active_tile.percent.width(),
+                                        active_tile.percent.fontMetrics().horizontalAdvance('100%'))
         tile = window.transfer_tiles[3]
         window.on_event('progress', {'message': 3, 'done': 77, 'size': 100, 'speed': 10})
         self.assertEqual(tile.percent.text(), '77%')

@@ -26,7 +26,8 @@ Intermediate download progress is batched into one database transaction about on
 
 ## What is included
 
-- Compact dark interface with dense queue rows, downloaded/total bytes and inline progress bars for each archive, overall and active-file progress, speed, time remaining, and a collapsible Activity log.
+- Resizable window: 960×640 at launch, down to 500×340, with settings accessible in a separate window at compact sizes.
+- Compact dark interface with dense queue rows, downloaded/total bytes and inline progress bars for each archive, overall and active-file progress, speed, time remaining, and a separate Activity log window.
 - A single horizontal row shows a separate progress bar and percentage for every active download, including while browsing other queue pages.
 - The queue opens in **Unfinished** mode. Switch to **Downloaded** or **All** and browse the entire saved history in pages of 200 files, with direct page-number navigation.
 - **Parallel downloads** changes live from 1 to 20. Raising it starts more files; lowering it lets active files finish before new ones start. The active count and selected limit are shown together.
