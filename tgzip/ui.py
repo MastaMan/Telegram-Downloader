@@ -44,13 +44,19 @@ QTableWidget { background: #151f30; alternate-background-color: #182337; border:
 QTableWidget::item { padding: 3px 5px; border-bottom: 1px solid #253147; }
 QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 5px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 8px; padding: 8px; color: #acbdd3; font-size: 12px; }
-QScrollBar:horizontal { background: #131d2e; height: 9px; }
-QScrollBar::handle:horizontal { background: #394b68; min-width: 24px; border-radius: 4px; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #131d2e; }
-QScrollBar:vertical { background: #131d2e; width: 9px; }
-QScrollBar::handle:vertical { background: #394b68; min-height: 24px; border-radius: 4px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal { background: #131d2e; height: 9px; border: none; border-radius: 4px; margin: 0; }
+QScrollBar:vertical { background: #131d2e; width: 9px; border: none; border-radius: 4px; margin: 0; }
+QScrollBar::handle:horizontal { background: #394b68; min-width: 24px; border: 1px solid #131d2e; border-radius: 4px; }
+QScrollBar::handle:vertical { background: #394b68; min-height: 24px; border: 1px solid #131d2e; border-radius: 4px; }
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover { background: #59769b; }
+QScrollBar::handle:horizontal:pressed, QScrollBar::handle:vertical:pressed { background: #78adff; }
+QScrollBar::handle:horizontal:disabled, QScrollBar::handle:vertical:disabled { background: #253247; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; border: none; background: transparent; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: none; background: transparent; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar::up-arrow, QScrollBar::down-arrow, QScrollBar::left-arrow, QScrollBar::right-arrow { width: 0; height: 0; background: transparent; }
+QAbstractScrollArea::corner { background: #131d2e; border: none; }
 QToolTip { background: #23344e; color: #ffffff; border: 1px solid #567398; padding: 7px; }
 '''
 
@@ -345,7 +351,7 @@ class Window(QMainWindow):
         self.verification_info = None
         self.update_plan = None
         self.setWindowTitle(f'Telegram Archive Desktop v{__version__}' + (' — Preview' if demo else ''))
-        self.resize(960, 640)
+        self.resize(900, 600)
         self.setMinimumSize(500, 340)
         self.setStyleSheet(STYLE)
         self.build_ui()
@@ -435,6 +441,7 @@ class Window(QMainWindow):
         folder_actions = QHBoxLayout()
         folder_actions.addWidget(self.folder_btn)
         self.open_btn = button('Open', self.open_folder)
+        self.open_btn.setToolTip('Open the archive folder for the selected chat.')
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
         parallel_row = QHBoxLayout()
@@ -623,7 +630,7 @@ class Window(QMainWindow):
             self.apply_window_layout()
 
     def apply_window_layout(self):
-        narrow = self.width() < 900 or self.height() < 540
+        narrow = self.width() <= 900 or self.height() < 540
         small = self.width() < 700
         short = self.height() < 500
         self.panel_btn.setVisible(narrow)
@@ -718,8 +725,18 @@ class Window(QMainWindow):
             self.log('Folder updated for newly discovered files. Existing queue paths are preserved.')
 
     def open_folder(self):
-        if self.folder:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.folder))
+        if not self.folder:
+            return
+        folder = Path(self.folder)
+        if self.account and self.selected is not None:
+            folder = folder / f'account_{self.account["id"]}' / f'chat_{self.selected}'
+        if not folder.is_dir():
+            QMessageBox.information(self, 'Archive folder',
+                                    'The archive folder does not exist yet. Start a download to create it.\n\n' + str(folder))
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            QMessageBox.warning(self, 'Cannot open folder',
+                                'Could not open the archive folder in your file manager.\n\n' + str(folder))
 
     def choose_checker(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Select installed WinRAR.exe', '', 'WinRAR (WinRAR.exe)')

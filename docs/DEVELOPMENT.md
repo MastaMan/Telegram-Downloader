@@ -63,7 +63,7 @@ The authorization state uses Telethon `StringSession` in memory. Only a DPAPI-en
 
 ## Updating and restarting
 
-The header and window title display `tgzip.__version__`, defined in `tgzip/__init__.py`. This display version is separate from the Git commit SHA used for update detection.
+The header and window title display `tgzip.__version__`, defined in `tgzip/__init__.py`. This display version is separate from the Git commit SHA used for update detection. Every authorized release increments the patch component by default; minor and major increments require an explicit owner request. Prepare the bump once per release, not once per feature or retry. See [Release procedure](RELEASING.md#version-policy).
 
 The update command runs standard-library network and staging work in one explicit thread pool. Cancellation signals that worker and awaits cleanup before the engine can close. Package initialization eagerly resolves ThreadPoolExecutor before Qt import hooks load; a subprocess regression check covers a Python 3.15 lazy-import incompatibility observed during testing.
 
@@ -73,9 +73,11 @@ The UI's update-ready event uses the normal close path. After the worker has sto
 
 ## Responsive window
 
-The main window opens at 960×640 with a 500×340 minimum. `apply_window_layout` responds to width and height breakpoints. A scrollable sidebar is moved into a non-modal Settings dialog on demand in compact mode and returned to the main layout when that dialog closes; this reuses live controls and avoids duplicate state or command connections. Activity uses a separate dialog at all sizes. Closing the main window closes both dialogs before shutdown.
+The main window opens at 900×600 with a 500×340 minimum. `apply_window_layout` responds to width and height breakpoints. A scrollable sidebar is moved into a non-modal Settings dialog on demand in compact mode and returned to the main layout when that dialog closes; this reuses live controls and avoids duplicate state or command connections. Activity uses a separate dialog at all sizes. Closing the main window closes both dialogs before shutdown.
 
 The active-transfer strip is hosted in a horizontal scroll area: tiles retain enough width for readable percentages, with scrolling whenever the available row width is insufficient. Short windows hide filename labels and secondary metrics. Narrow queue views use horizontal scrolling to preserve all columns and compact pagination labels. No window-layout change modifies download state, filters, or settings.
+
+Horizontal and vertical scrollbars share the global Qt stylesheet: nine-pixel dark tracks, rounded handles with a 24-pixel minimum length, subdued idle color, brighter hover and pressed states, hidden arrow buttons, and matching page/corner backgrounds. The same style inherits into Settings, Activity, and dropdown lists. Preserve this treatment for new scrollable views and inspect both axes in compact mode.
 
 ## Run tests
 

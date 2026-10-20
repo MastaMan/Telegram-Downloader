@@ -59,7 +59,7 @@ If a private group is missing, check that it opens in Telegram under the same ac
 
 ## 6. Choose where archives are saved
 
-Click **Choose…** in the **Settings** block and select a local folder with enough free space. The location is remembered.
+Click **Choose…** in the **Settings** block and select a local folder with enough free space. The location is remembered. **Open** opens the selected chat's archive subfolder (`account_<ID>/chat_<ID>`), directly where its ZIP and RAR files are saved. Without a selected chat, it opens the chosen base folder. If the chat folder has not been created yet, the app shows its path and asks you to start a download.
 
 New files are organized as:
 
@@ -105,7 +105,7 @@ Use **Speed limit** in the same sidebar to select **Unlimited** (default), **10 
 
 The limit uses the same binary units as the progress display: 1 MB/s means 1,048,576 archive bytes per second. Requests are paced in chunks of up to 512 KiB, so short bursts and fluctuating displayed speeds are normal. Requests already in flight when you lower the limit may finish; the new budget applies to subsequent requests. Network/protocol overhead, Telegram metadata, and application-update downloads are outside this limit. Pause, Stop, and closing the window interrupt bandwidth waits and preserve partial files.
 
-The window opens at **960×640** and can shrink to **500×340**. Below 900 pixels wide or 540 pixels high, the sidebar moves into the **Settings** window; it contains the same account, chat, folder, download-limit, and archive-check controls. Widening the main window restores the sidebar after Settings closes. The active-file strip scrolls horizontally when the tiles need more space; in narrow windows the queue also scrolls horizontally. Very short windows hide secondary metrics and tile filenames, retaining progress percentages and tooltips. **Activity** opens a separate log window so it does not squeeze the queue. Closing the main window closes these auxiliary windows and performs the normal safe shutdown.
+The window opens at **900×600** and can shrink to **500×340**. At 900 pixels wide or less, or below 540 pixels high, the sidebar moves into the **Settings** window; it contains the same account, chat, folder, download-limit, and archive-check controls. Widening the main window restores the sidebar after Settings closes. The active-file strip scrolls horizontally when the tiles need more space; in narrow windows the queue also scrolls horizontally. Very short windows hide secondary metrics and tile filenames, retaining progress percentages and tooltips. **Activity** opens a separate log window so it does not squeeze the queue. Closing the main window closes these auxiliary windows and performs the normal safe shutdown.
 
 The compact interface gives most of the window to the queue. Shorter controls and dense rows keep more archives visible without reducing the main text size. **Activity** in the queue header opens or closes the session log window; it is closed by default. **WinRAR…** and **Check archives** are grouped under **Archive checks** in the left sidebar, with a separate background-check status. Extra explanations and full truncated names are available in tooltips.
 

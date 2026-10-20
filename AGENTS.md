@@ -3,6 +3,7 @@
 ## Communication and product
 
 - Respond to the owner in Russian. Keep application UI, source comments, and repository documentation in English.
+- Keep all in-app scrollbars consistent with the dark design: thin tracks, rounded handles, visible hover/pressed feedback, and matching page/corner backgrounds in both orientations. Check compact layouts, dialogs, and dropdowns when changing scrollable views.
 - This is a standalone Windows application. Preserve the single `Start.bat` launch entry point.
 - Work directly in this repository on `main`. Do not create branches or worktrees.
 - Preserve unrelated local work and untracked files. Never include credentials, Telegram sessions, downloaded archives, runtime environments, or application databases in commits.
@@ -23,6 +24,14 @@ An explicit instruction such as "release", "make a release", "push", "релиз
 Treat an authorized push as a release: review the complete outgoing changes, run appropriate checks, update relevant documentation, commit the intended files, push `main`, and verify the published commit. Do not reduce it to an unchecked upload. A later request to wait or make further changes overrides earlier publication approval.
 
 Until approval, leave the finished work local and report that it has not been published. Do not infer standing permission to release every future feature from an earlier release request.
+
+## Release versions
+
+- Every authorized release/push to `main` increments the app version in `tgzip/__init__.py` exactly once, including documentation-only releases. Default to a **patch** increment (`X.Y.Z` → `X.Y.(Z+1)`).
+- Use a **minor** (`X.(Y+1).0`) or **major** (`(X+1).0.0`) increment only when the owner explicitly requests that level. Feature size or breaking changes alone do not authorize choosing a larger increment.
+- Bump during release preparation, before final validation and commit, using the last published version as the baseline. Do not bump for each feature, local commit, test run, or retry of the same unpublished release.
+- A version-policy discussion is not release approval. Keep the version unchanged until publication is authorized; preserve the approval workflow above.
+- Report the published version and commit SHA. Update detection still uses the public `main` SHA; this rule does not introduce tags, GitHub Releases, or automatic CI.
 
 ## Delivery and validation
 

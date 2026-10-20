@@ -42,8 +42,10 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(window.table.rowCount(), 10)
         self.assertFalse(window.activity.isVisible())
-        self.assertEqual((window.width(), window.height()), (960, 640))
-        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 9)
+        self.assertEqual((window.width(), window.height()), (900, 600))
+        self.assertTrue(window.panel_btn.isVisible())
+        self.assertFalse(window.sidebar_scroll.isVisible())
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 8)
         summary = window.transfers_info['summary']
         self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))
         self.assertEqual(window.file_name.text(), '4 active · Limit 20')
@@ -145,6 +147,37 @@ class UITests(unittest.TestCase):
         window.close()
         self.assertFalse(window.panel_dialog.isVisible())
         self.assertFalse(window.activity_dialog.isVisible())
+
+    def test_open_uses_selected_chat_archive_directory(self):
+        window = Window(demo=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'account_123456789' / 'chat_-100123'
+            target.mkdir(parents=True)
+            second = root / 'account_123456789' / 'chat_-100456'
+            second.mkdir()
+            window.on_event('settings', {'download_dir': directory})
+            with patch('tgzip.ui.QDesktopServices.openUrl', return_value=True) as open_url:
+                window.open_btn.click()
+                self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), target)
+                window.on_event('selected', -100456)
+                window.open_btn.click()
+                self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), second)
+                window.on_event('selected', None)
+                window.open_btn.click()
+                self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), root)
+        window.close()
+
+    def test_open_missing_archive_directory_does_not_open_root_instead(self):
+        window = Window(demo=True)
+        with tempfile.TemporaryDirectory() as directory:
+            window.on_event('settings', {'download_dir': directory})
+            with patch('tgzip.ui.QDesktopServices.openUrl') as open_url, \
+                 patch('tgzip.ui.QMessageBox.information') as message:
+                window.open_btn.click()
+                open_url.assert_not_called()
+                self.assertIn('chat_-100123', message.call_args.args[2])
+        window.close()
 
     def test_demo_process_renders_and_exits_cleanly(self):
         with tempfile.TemporaryDirectory() as directory:

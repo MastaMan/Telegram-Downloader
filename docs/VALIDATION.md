@@ -1,5 +1,31 @@
 # Validation and release limits
 
+## Patch release 1.0.1 — 20 October 2026
+
+This release includes compact 900×600 startup, consistent dark scrollbars, selected-chat archive folder access from **Open**, and the documented default patch-version policy. The header and window title both display **v1.0.1**.
+
+Final candidate checks on macOS:
+
+- Python **3.14.8**: **191 tests**, 190 passed and one skipped (Windows DPAPI).
+- Python **3.15.0**: **191 tests**, 189 passed and two skipped (Windows DPAPI and the unavailable cryptg wheel).
+- Launcher execution tests used portable PowerShell **7.6.7**. The Python 3.14 environment probe, bytecode compilation, and whitespace checks passed.
+- Offscreen previews were inspected at **900×600** and **500×340**. Startup dimensions and displayed version were asserted; the documentation preview was refreshed for 1.0.1.
+- Folder-opening tests cover the selected chat, switching chats, the base-folder fallback without a selection, and a missing chat folder. File-manager opening is mocked; no existing archives are moved.
+
+These are local/offscreen and simulated-network checks. Real Windows rendering, Windows DPAPI, live Telegram downloads, WinRAR execution, and a complete installed Windows update were not verified. The Windows workflow remains manual-only.
+
+## Compact layout on startup — 20 October 2026
+
+The default window now opens at **900×600**, with Settings available from the header and the sidebar hidden immediately. The sidebar returns above 900 pixels wide when the window is at least 540 pixels high. The 500×340 minimum is unchanged.
+
+All **25 UI tests** passed on macOS with Python **3.14.8**, including the startup dimensions, compact Settings access, eight complete queue rows at the new default height, and the existing resize/scroll/auxiliary-window checks. The 900×600 Qt preview was inspected and saved as the documentation preview. Real Windows rendering remains unverified.
+
+## Consistent dark scrollbars — 20 October 2026
+
+Both orientations now share nine-pixel dark tracks, rounded handles, hover/pressed feedback, and explicit page/corner styling. Arrow buttons are suppressed. The style inherits into the queue, active-transfer strip, Settings, Activity, and dropdowns.
+
+All **25 UI tests** passed on macOS with Python **3.14.8**. Offscreen previews were inspected for the 500×340 window with both queue scroll axes and twenty active transfers, a shortened Settings dialog, a long Activity log, and a chat dropdown with 102 entries and a nonzero scroll range. Pointer simulation confirmed the handle uses the intended hover (`#59769b`) and pressed (`#78adff`) colors. No real Windows rendering was available.
+
 ## Smaller, responsive window — 20 October 2026
 
 The default window is now 960×640 and the minimum is 500×340 (half the previous minimum width and height). Compact mode moves the existing sidebar controls into Settings on demand, provides horizontal scrolling for crowded active-transfer tiles and narrow queue columns, and abbreviates pagination buttons. Very short layouts hide secondary metrics and filename labels while preserving percentages and tooltips. Activity opens separately. Both auxiliary windows close with the main window.

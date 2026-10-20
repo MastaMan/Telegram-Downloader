@@ -26,7 +26,8 @@ Discussing the word "release", asking what a push does, or asking to write these
 | --- | --- |
 | Repository | `https://github.com/MastaMan/Telegram-Downloader.git` |
 | Working and delivery branch | `main`; no feature branches or worktrees |
-| Release identity | The full Git commit SHA published on remote `main` |
+| App version | `tgzip.__version__` in `tgzip/__init__.py`; patch increment for every release by default |
+| Release identity | The app version paired with the full Git commit SHA published on remote `main` |
 | Update discovery | `updater.py` queries the public GitHub `commits/main` endpoint |
 | ZIP installation | Downloads the source archive pinned to that SHA, validates it, and replaces managed files |
 | Git installation | Requires a clean `main` checkout and a fast-forward update |
@@ -38,7 +39,23 @@ There is no separate promotion step after pushing `main`: the commit is immediat
 
 "Push automatically means release" describes the agent's workflow: an authorized push includes preparation, validation, publication, and verification. It does not mean a GitHub Action creates a release, and it does not mean installed applications update themselves without the user clicking **Check updates**.
 
-The updater does not consult tags, semantic versions, or GitHub Releases. The current `__version__` in `tgzip/__init__.py` is not its update selector. Do not invent a version bump, tag, release asset, or signed installer as a prerequisite. If the owner explicitly requests those artifacts, prepare them in addition to this process and describe their actual relationship to the updater.
+The updater discovers updates by commit SHA, not by app version, tags, or GitHub Releases. Every release must nevertheless have a new app version for the owner to identify it in the header and window title. Do not create tags, release assets, or signed installers unless explicitly requested.
+
+### Version policy
+
+Use `MAJOR.MINOR.PATCH` in `tgzip/__init__.py` as the single source of the app version. Every authorized release, including an authorized push and documentation-only publication, increments it **once**:
+
+| Owner's instruction | Required change | Example |
+| --- | --- | --- |
+| Release / push, with no explicit level | Increment patch; keep major and minor | `1.2.3` → `1.2.4` |
+| Explicit minor release | Increment minor; reset patch | `1.2.3` → `1.3.0` |
+| Explicit major release | Increment major; reset minor and patch | `1.2.3` → `2.0.0` |
+
+Only the owner can choose a minor or major release. Do not infer either from feature scope, interface changes, or compatibility changes. A request to document this policy does not authorize publication or an immediate bump.
+
+Prepare the bump only after release approval, before final validation and the release commit. Read the version from the fetched `origin/main` as the published baseline; compare it with the local version and pending release work. Several features or local commits delivered together receive one increment. If validation or push fails, retain the prepared version for that same unpublished release; do not increment again just because the procedure is retried. If remote `main` advances, reconcile the work and recalculate from the newly published version before publishing.
+
+The existing `1.0.0` history is not renumbered. The first patch release after adoption of this policy will be `1.0.1`, unless the owner explicitly requests a minor or major release. Later releases follow the table above.
 
 ## 3. Inspect the candidate
 
@@ -54,6 +71,7 @@ git diff --cached
 git fetch origin main
 git log --oneline origin/main..HEAD
 git log --oneline HEAD..origin/main
+git show origin/main:tgzip/__init__.py
 ```
 
 - Verify that the branch is `main` and `origin` is the intended repository.
@@ -62,6 +80,8 @@ git log --oneline HEAD..origin/main
 - Exclude `.DS_Store`, personal ZIPs such as `Archive.zip`, screenshots made only for investigation, credentials, session files, databases, logs, virtual environments, and downloaded archives.
 - If remote `main` advanced, reconcile it without overwriting local work. A clean checkout with no local commits may fast-forward with `git merge --ff-only origin/main`. Divergence needs deliberate review and integration on `main`; never force-push or reset away work.
 - Recheck and retest any affected behavior after integration. If a conflict needs the owner's decision, explain the specific conflict and keep publication pending.
+
+After reviewing the candidate and reconciling remote changes, set the release version according to section 2. Include this version change in the candidate validated below.
 
 ## 4. Validate the actual release contents
 
@@ -107,7 +127,7 @@ For a GUI preview without Telegram credentials:
 python -m tgzip --demo --screenshot preview.png
 ```
 
-Update `docs/interface-preview.png` when the released interface changes visibly. Do not commit incidental preview files. Demo mode and mock tests are not live Telegram validation.
+Confirm the header and window title display the prepared version, and refresh `docs/interface-preview.png` so its version matches the release. Update it whenever the released interface changes visibly. Do not commit incidental preview files. Demo mode and mock tests are not live Telegram validation.
 
 Record actual results, including skips and unavailable environments. Never describe macOS/offscreen checks as Windows testing, or mocked network operations as successful real-account downloads. Do not copy an older test count as evidence for a new code revision.
 
@@ -128,7 +148,7 @@ Fix failures caused by the candidate before publishing. If an essential check ca
 
 ## 6. Commit and publish after approval
 
-Review and stage only the intended files by explicit path. Avoid `git add .` and `git add -A` in a checkout containing unrelated files.
+Review and stage only the intended files by explicit path, including the required `tgzip/__init__.py` version bump. Avoid `git add .` and `git add -A` in a checkout containing unrelated files.
 
 ```sh
 git diff --check
@@ -155,7 +175,7 @@ git status --short
 
 Compare the full local SHA with the SHA reported for remote `main`. A successful local commit is not a published release. A failed or ambiguous push is not proof of publication: inspect the remote before retrying. Do not use `--force`.
 
-When possible, also read the public `commits/main` endpoint that the application uses and confirm that it exposes the intended SHA. If someone advanced `main` after the push, inspect that history before making a claim about what the updater now serves.
+Verify that `tgzip/__init__.py` at the published SHA contains the prepared version. When possible, also read the public `commits/main` endpoint that the application uses and confirm that it exposes the intended SHA. If someone advanced `main` after the push, inspect that history before making a claim about what the updater now serves.
 
 Do not launch an updater against the owner's running application or modify their download data merely to verify publication. Local updater tests and remote commit checks should be reported separately from an actual Windows end-to-end update.
 
@@ -164,7 +184,7 @@ Do not launch an updater against the owner's running application or modify their
 For a completed release, report:
 
 - What the release changes.
-- The published short SHA and a link to `https://github.com/MastaMan/Telegram-Downloader/commit/<full-sha>`.
+- The published app version (for example, `v1.0.1`), release level, and short SHA with a link to `https://github.com/MastaMan/Telegram-Downloader/commit/<full-sha>`.
 - Checks performed, results, and material limitations.
 - How to receive it: **Check updates**, or the repository source ZIP for a new installation.
 
@@ -174,6 +194,6 @@ If publication has not been approved, state that the work is local and ask the n
 
 ## 8. Correct a published defect
 
-Keep published history intact. Prepare a corrective commit or a reviewed revert on `main`, validate it, and follow the same authorization and publication rules. A corrective push produces a new update SHA.
+Keep published history intact. Prepare a corrective commit or a reviewed revert on `main`, validate it, and follow the same authorization and publication rules. A corrective push produces a new update SHA and a new patch version by default, following the same owner-only minor/major rule.
 
 Source rollback does not automatically undo database migrations, downloaded files, filename restoration, or external runtime changes. Review compatibility before reverting; do not delete user data or reset the repository to hide a failed release.
