@@ -1,5 +1,9 @@
 # Development
 
+## Release workflow
+
+Follow [Release procedure](RELEASING.md) and the repository's [agent instructions](../AGENTS.md). Completing a feature does not authorize publication: first ask whether more changes are planned, then obtain release approval. An explicit release or push command authorizes the full checked publication process. Every push to `main` becomes available through **Check updates**.
+
 ## Layout
 
 | File | Responsibility |
@@ -26,6 +30,8 @@ Only one user operation runs at a time. A download operation owns two asyncio Ta
 Queue identity is `(account_id, chat_id, message_id)`. Document identity and expected size are checked before resuming; identifiers are metadata, not filename prefixes. SQLite transactions atomically add a discovered file and advance the scan cursor. WAL and FULL synchronous mode are used for committed metadata. The partial file is the authority for resume offsets; metadata progress is for display. Session and preferences use temporary-file replacement.
 
 Aggregate transfer events include independent copies of each active file's message ID, name, path, size, and current bytes. The separate File bar keeps one stable automatic target while it is active, or pins the queue row selected by the user. Queue snapshots preserve selection by message ID rather than row position and block selection signals while rebuilding the table. The UI retains only the visible queue, active pool, and last watched file, so it can show active files beyond the 1,000-row display limit without copying the entire database. Chat/account changes reset tracking; background verification never selects the watched download.
+
+The compact queue paints per-row progress through `ProgressDelegate`, avoiding a widget for every entry. Progress events update both the transferred byte counts and the delegate's numeric value. The single aggregate bar also shows restored/stopped queue progress; rename operations retain their own temporary progress display. Long names and footer messages use `ElidedLabel` with full tooltips so they cannot force the window wider or consume extra queue height. Archive-check controls live in the sidebar, and Activity toggles from the queue header.
 
 Original names are sanitized only for Windows-invalid characters and reserved device names. Case and length are preserved. A shared FilenameAllocator reserves case-folded paths against the entire saved queue and directory entries, including `.part` files; only collisions add `__dup_<number>__`. Each scan/download operation has its own allocator, and workers reserve destinations without yielding. Paths are checked again before the first transfer, so a same-size unrelated file added after scanning is not mistaken for a completed download. Final bytes are checkpointed before finalization; new-style paths require this checkpoint to recover an existing final file.
 

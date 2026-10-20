@@ -103,7 +103,7 @@ Use **Speed limit** in the same sidebar to select **Unlimited** (default), **10 
 
 The limit uses the same binary units as the progress display: 1 MB/s means 1,048,576 archive bytes per second. Requests are paced in chunks of up to 512 KiB, so short bursts and fluctuating displayed speeds are normal. Requests already in flight when you lower the limit may finish; the new budget applies to subsequent requests. Network/protocol overhead, Telegram metadata, and application-update downloads are outside this limit. Pause, Stop, and closing the window interrupt bandwidth waits and preserve partial files.
 
-The compact interface gives most of the window to the queue. **Activity** expands or collapses the session log; it is collapsed by default. Extra explanations are available in tooltips.
+The compact interface gives most of the window to the queue. Shorter controls and dense rows keep more archives visible without reducing the main text size. **Activity** in the queue header expands or collapses the session log; it is collapsed by default. **WinRAR…** and **Check archives** are grouped under **Archive checks** in the left sidebar, with a separate background-check status. Extra explanations and full truncated names are available in tooltips.
 
 The separate **File** bar beneath the overall download metrics shows one archive's name, downloaded/total bytes, and percentage. **Follow active** is enabled by default: the display stays on one active file, then switches when that file finishes or stops. It also works for active files beyond the first 1,000 visible queue entries.
 
@@ -115,7 +115,8 @@ The interface shows:
 | --- | --- |
 | Main download bar | Received bytes across the full queue; the title shows the number of active downloads |
 | File bar | Progress of one automatically followed or explicitly selected archive, with its name and byte counts |
-| Row progress | Bytes saved for each individual archive |
+| Transferred | Downloaded bytes / full size for each archive, updated during transfer |
+| Row progress | A small progress bar and percentage for each individual archive |
 | Transfer speed | Combined recent speed of active downloads; resets when paused or stalled |
 | Time left | Estimated remaining queue download time, based on combined speed; archive check time is not included |
 | Files downloaded | Full byte count received divided by all discovered files; includes quarantined files |

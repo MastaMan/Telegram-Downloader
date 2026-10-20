@@ -8,7 +8,7 @@ import subprocess
 import sys
 import unittest
 from unittest.mock import patch
-from PySide6.QtCore import QLockFile
+from PySide6.QtCore import QLockFile, Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 from shiboken6 import delete, isValid
 from tgzip.engine import Bridge
@@ -41,19 +41,51 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(window.table.rowCount(), 12)
         self.assertFalse(window.activity.isVisible())
-        self.assertGreaterEqual(window.table.viewport().height() // 32, 9)
-        self.assertEqual(window.file_bar.value(), window.overall_bar.value())
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 19)
+        summary = window.transfers_info['summary']
+        self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))
         self.assertEqual(window.file_name.text(), '4 active downloads')
         self.assertEqual(window.archive_bar.value(), 620)
         self.assertEqual(window.archive_name.text(), 'Environment assets — autumn.rar')
-        self.assertNotEqual(window.archive_bar.value(), window.overall_bar.value())
+        self.assertNotEqual(window.archive_bar.value(), window.file_bar.value())
         self.assertIn('18.6', window.speed_value.text())
         self.assertTrue(window.chat_box.isEnabled())
         self.assertFalse(window.start_btn.isEnabled())
         for btn in window.findChildren(QPushButton):
             if btn.isVisible():
-                self.assertGreaterEqual(btn.height(), 36, btn.text())
+                self.assertGreaterEqual(btn.height(), 28, btn.text())
         self.assertFalse(window.grab().isNull())
+        window.close()
+
+    def test_compact_layout_keeps_controls_visible_at_minimum_size(self):
+        window = Window(demo=True)
+        window.resize(1000, 680)
+        window.show()
+        self.app.processEvents()
+        self.assertEqual((window.width(), window.height()), (1000, 680))
+        self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 13)
+        for state in ('downloading', 'paused', 'idle'):
+            window.on_event('state', state)
+            window.activity_toggle.click()
+            self.app.processEvents()
+            for widget in (window.table, window.archive_bar, window.file_bar, window.chat_box,
+                           window.speed_box, window.verify_btn, window.stop_btn):
+                position = widget.mapTo(window, widget.rect().topLeft())
+                self.assertGreaterEqual(position.x(), 0)
+                self.assertGreaterEqual(position.y(), 0)
+                self.assertLessEqual(position.x() + widget.width(), window.width())
+                self.assertLessEqual(position.y() + widget.height(), window.height())
+            for btn in window.findChildren(QPushButton):
+                if btn.isVisible():
+                    self.assertGreaterEqual(btn.width(), btn.fontMetrics().horizontalAdvance(btn.text()) + 12,
+                                            btn.text())
+        # Unbounded names and errors must not force a larger window or obscure controls.
+        window.on_event('account', {'name': 'Long account name ' * 30, 'id': 123456789})
+        window.on_event('settings', {'download_dir': 'C:/Downloads/' + 'Long folder name ' * 30})
+        window.footer.setText('A very long operation detail ' * 50)
+        self.app.processEvents()
+        self.assertEqual((window.width(), window.height()), (1000, 680))
+        self.assertEqual(window.footer.toolTip(), window.footer.text())
         window.close()
 
     def test_demo_process_renders_and_exits_cleanly(self):
@@ -65,6 +97,26 @@ class UITests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(screenshot.exists())
             self.assertGreater(screenshot.stat().st_size, 1000)
+
+    def test_saved_queue_shows_overall_progress_before_start_and_after_stop(self):
+        window = Window()
+        summary = {'total': 2, 'complete': 1, 'failed': 0, 'bytes': 200, 'received': 150}
+        window.on_event('queue', {'rows': [], 'summary': summary})
+        self.assertEqual(window.file_bar.value(), 750)
+        self.assertEqual(window.percent_label.text(), '75%')
+        self.assertEqual(window.byte_label.text(), '150 B of 200 B')
+        window.on_event('state', 'renaming')
+        window.on_event('rename_progress', {'done': 1, 'total': 4})
+        window.on_event('queue', {'rows': [], 'summary': summary})
+        self.assertEqual(window.file_bar.value(), 250)
+        window.on_event('state', 'idle')
+        window.on_event('queue', {'rows': [], 'summary': summary})
+        self.assertEqual(window.file_bar.value(), 750)
+        window.on_event('current', None)
+        window.on_event('queue', {'rows': [], 'summary': dict(summary, total=0, complete=0, received=0, bytes=0)})
+        self.assertEqual(window.file_bar.value(), 0)
+        self.assertEqual(window.file_name.text(), 'No archives queued')
+        window.close()
 
     def test_progress_states_and_chat_switch_availability(self):
         window = Window(demo=True)
@@ -168,6 +220,8 @@ class UITests(unittest.TestCase):
         window.on_event('progress', {'done': 70, 'size': 100, 'speed': 1024,
                                     'message': 4})
         self.assertEqual(window.table.item(3, 2).text(), '70%')
+        self.assertAlmostEqual(window.table.item(3, 2).data(Qt.ItemDataRole.UserRole), .7)
+        self.assertEqual(window.table.item(3, 1).text(), '70 B / 100 B')
         self.assertEqual(original, (window.file_name.text(), window.file_bar.value(), window.speed_value.text()))
         window.on_event('state', 'paused')
         self.assertEqual(window.table.item(3, 3).text(), 'Paused')

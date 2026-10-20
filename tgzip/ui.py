@@ -2,44 +2,45 @@ import json
 import time
 from pathlib import Path
 import qrcode
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap
+from PySide6.QtCore import Qt, QTimer, QUrl, QRect
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyle,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
 from .storage import parallel_downloads, speed_limit, SPEED_LIMITS
 
 STYLE = '''
 QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 13px; }
 QMainWindow { background: #0d1422; }
-QFrame#card { background: #151f30; border: 1px solid #253247; border-radius: 14px; }
+QFrame#card { background: #151f30; border: 1px solid #253247; border-radius: 8px; }
 QFrame#card QLabel, QFrame#card QWidget#transparent { background: transparent; }
 QLabel#muted { color: #99abc3; }
-QLabel#title { font-size: 21px; font-weight: 700; }
-QLabel#section { font-size: 16px; font-weight: 600; }
-QLabel#metric { font-size: 18px; font-weight: 600; }
-QLabel#badge { color: #69dcca; background: #153e3e; border-radius: 10px; padding: 6px 12px; }
-QLabel#logo { background: #4187ff; color: white; border-radius: 13px; font-size: 21px; font-weight: 800; }
-QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 8px; padding: 8px 10px; min-height: 18px; font-weight: 600; }
+QLabel#title { font-size: 18px; font-weight: 700; }
+QLabel#section { font-size: 14px; font-weight: 600; }
+QLabel#metric { font-size: 14px; font-weight: 600; }
+QLabel#badge { color: #69dcca; background: #153e3e; border-radius: 6px; padding: 4px 8px; }
+QLabel#logo { background: #4187ff; color: white; border-radius: 7px; font-size: 15px; font-weight: 800; }
+QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 5px; padding: 4px 8px; min-height: 20px; font-weight: 600; }
 QPushButton:hover { background: #304460; border-color: #6a91c7; }
 QPushButton:pressed { background: #17243a; }
 QPushButton:disabled { color: #6d7b90; background: #172134; border-color: #263249; }
 QPushButton#primary { background: #4689ff; color: white; border-color: #4689ff; }
 QPushButton#primary:hover { background: #639bff; }
 QPushButton#primary:disabled { background: #273d60; color: #7d91af; border-color: #273d60; }
-QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 7px; padding: 8px; min-height: 20px; selection-background-color: #3868ae; }
+QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 4px 6px; min-height: 20px; selection-background-color: #3868ae; }
 QLineEdit:focus, QComboBox:focus { border-color: #5996ff; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
 QComboBox::drop-down { width: 24px; border: none; }
 QCheckBox { background: transparent; }
-QProgressBar { background: #26334a; border: none; border-radius: 5px; min-height: 10px; max-height: 10px; }
-QProgressBar::chunk { background: #5c9aff; border-radius: 5px; }
+QProgressBar { background: #26334a; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
+QProgressBar::chunk { background: #5c9aff; border-radius: 3px; }
 QProgressBar#overall::chunk { background: #48cbb5; }
 QTableWidget { background: #151f30; alternate-background-color: #182337; border: none; gridline-color: #263247; selection-background-color: #25446b; }
-QTableWidget::item { padding: 5px; border-bottom: 1px solid #253147; }
-QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 7px; border: none; font-weight: 600; }
+QTableWidget::item { padding: 3px 5px; border-bottom: 1px solid #253147; }
+QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 5px; border: none; font-weight: 600; }
 QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 8px; padding: 8px; color: #acbdd3; font-size: 12px; }
 QScrollBar:vertical { background: #131d2e; width: 9px; }
 QScrollBar::handle:vertical { background: #394b68; min-height: 24px; border-radius: 4px; }
@@ -71,6 +72,54 @@ def label(text, name=None):
     return widget
 
 
+class ElidedLabel(QLabel):
+    """Keep long names/statuses on one line without losing the full tooltip."""
+
+    def __init__(self, text, name=None):
+        super().__init__(text)
+        if name:
+            self.setObjectName(name)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setToolTip(text)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideMiddle, self.contentsRect().width())
+        painter.drawText(self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+
+class ProgressDelegate(QStyledItemDelegate):
+    """Paint compact progress in each row without creating per-row widgets."""
+
+    def paint(self, painter, option, index):
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        text = styled.text
+        styled.text = ''
+        style = styled.widget.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, styled, painter, styled.widget)
+        rect = option.rect.adjusted(7, 0, -7, -1)
+        text_width = option.fontMetrics.horizontalAdvance('100%') + 6
+        track = QRect(rect.left(), rect.center().y() - 3, max(0, rect.width() - text_width - 6), 6)
+        fraction = max(0, min(1, index.data(Qt.ItemDataRole.UserRole) or 0))
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor('#2b3b53'))
+        painter.drawRoundedRect(track, 3, 3)
+        fill = QRect(track)
+        fill.setWidth(round(track.width() * fraction))
+        painter.setBrush(QColor('#48cbb5' if fraction == 1 else '#78adff'))
+        painter.drawRoundedRect(fill, 3, 3)
+        painter.setPen(QColor('#eaf0fa'))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+        painter.restore()
+
+
 def button(text, slot, primary=False):
     widget = QPushButton(text)
     if primary:
@@ -83,8 +132,8 @@ def card():
     widget = QFrame()
     widget.setObjectName('card')
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(14, 12, 14, 12)
-    layout.setSpacing(8)
+    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setSpacing(6)
     return widget, layout
 
 
@@ -236,12 +285,12 @@ class Window(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         page = QVBoxLayout(root)
-        page.setContentsMargins(16, 14, 16, 10)
-        page.setSpacing(10)
+        page.setContentsMargins(10, 8, 10, 6)
+        page.setSpacing(6)
         header = QHBoxLayout()
         logo = label('TA', 'logo')
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setFixedSize(36, 36)
+        logo.setFixedSize(28, 28)
         header.addWidget(logo)
         title_box = QVBoxLayout()
         title_box.setSpacing(3)
@@ -255,16 +304,15 @@ class Window(QMainWindow):
         header.addWidget(self.badge)
         page.addLayout(header)
         body = QHBoxLayout()
-        body.setSpacing(12)
+        body.setSpacing(8)
         sidebar = QVBoxLayout()
-        sidebar.setSpacing(10)
+        sidebar.setSpacing(8)
         sidebar_widget = QWidget()
         sidebar_widget.setLayout(sidebar)
-        sidebar_widget.setFixedWidth(240)
+        sidebar_widget.setFixedWidth(228)
         sidebar.setContentsMargins(0, 0, 0, 0)
         account_card, account_layout = card()
-        self.account_name = label('Connect Telegram', 'section')
-        self.account_name.setWordWrap(True)
+        self.account_name = ElidedLabel('Connect Telegram', 'section')
         account_layout.addWidget(self.account_name)
         self.account_detail = label('Sign in securely with a QR code.', 'muted')
         self.account_detail.setWordWrap(True)
@@ -297,8 +345,7 @@ class Window(QMainWindow):
         sidebar.addWidget(source_card)
         dest_card, dest_layout = card()
         dest_layout.addWidget(label('SAVE TO', 'muted'))
-        self.folder_label = label('Choose a download folder', 'section')
-        self.folder_label.setWordWrap(True)
+        self.folder_label = ElidedLabel('Choose a download folder', 'section')
         dest_layout.addWidget(self.folder_label)
         self.folder_btn = button('Choose…', self.choose_folder)
         folder_actions = QHBoxLayout()
@@ -328,43 +375,51 @@ class Window(QMainWindow):
         speed_row.addWidget(self.speed_box)
         dest_layout.addLayout(speed_row)
         sidebar.addWidget(dest_card)
+        check_card, checks = card()
+        checks.addWidget(label('Archive checks', 'section'))
+        self.checker_label = ElidedLabel('WinRAR not configured', 'muted')
+        checks.addWidget(self.checker_label)
+        check_actions = QHBoxLayout()
+        self.checker_btn = button('WinRAR…', self.choose_checker)
+        self.checker_btn.setToolTip('Select the installed WinRAR.exe for automatic archive checks.')
+        self.verify_btn = button('Check archives', lambda: self.send('verify'))
+        self.verify_btn.setToolTip('Test downloaded files in this chat without a password. Confirmed failures move to wrong_archives.')
+        check_actions.addWidget(self.checker_btn)
+        check_actions.addWidget(self.verify_btn)
+        checks.addLayout(check_actions)
+        sidebar.addWidget(check_card)
         sidebar.addStretch()
         body.addWidget(sidebar_widget)
         content = QVBoxLayout()
-        content.setSpacing(10)
+        content.setSpacing(6)
         current_card, current = card()
         file_heading = QHBoxLayout()
-        self.file_name = label('No active download', 'section')
-        self.file_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.file_name = ElidedLabel('No active download', 'section')
         file_heading.addWidget(self.file_name, 1)
         self.file_status = label('Ready', 'muted')
-        file_heading.addWidget(self.file_status)
         current.addLayout(file_heading)
         self.file_bar = QProgressBar()
+        self.file_bar.setObjectName('overall')
         self.file_bar.setRange(0, 1000)
         self.file_bar.setValue(0)
         self.file_bar.setTextVisible(False)
-        current.addWidget(self.file_bar)
-        byte_row = QHBoxLayout()
-        self.byte_label = label('Choose a chat → Scan archives → Start', 'muted')
+        self.byte_label = ElidedLabel('Choose a chat → Scan archives → Start', 'muted')
         self.percent_label = label('0%', 'section')
-        byte_row.addWidget(self.byte_label)
-        byte_row.addStretch()
-        byte_row.addWidget(self.percent_label)
-        current.addLayout(byte_row)
+        file_heading.addWidget(self.byte_label, 1)
+        file_heading.addWidget(self.percent_label)
+        current.addWidget(self.file_bar)
         metrics = QHBoxLayout()
         self.speed_value, self.eta_value, self.done_value = label('—', 'metric'), label('—', 'metric'), label('0 / 0', 'metric')
         for caption, value in [('Speed', self.speed_value), ('Time left', self.eta_value), ('Downloaded', self.done_value)]:
             column = QHBoxLayout()
-            column.setSpacing(8)
+            column.setSpacing(5)
             column.addWidget(label(caption, 'muted'))
             column.addWidget(value)
             metrics.addLayout(column)
         current.addLayout(metrics)
         archive_heading = QHBoxLayout()
         archive_heading.addWidget(label('File', 'muted'))
-        self.archive_name = label('No file selected', 'muted')
-        self.archive_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.archive_name = ElidedLabel('No file selected', 'muted')
         archive_heading.addWidget(self.archive_name, 1)
         self.archive_detail = label('—', 'muted')
         archive_heading.addWidget(self.archive_detail)
@@ -386,37 +441,27 @@ class Window(QMainWindow):
         self.stop_btn = button('■  Stop', lambda: self.send('stop'))
         for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.stop_btn):
             controls.addWidget(btn)
+        controls.addStretch()
+        controls.addWidget(self.file_status)
         current.addLayout(controls)
-        checks = QHBoxLayout()
-        self.checker_label = label('WinRAR not configured', 'muted')
-        checks.addWidget(self.checker_label, 1)
-        self.checker_btn = button('WinRAR…', self.choose_checker)
-        self.checker_btn.setToolTip('Select the installed WinRAR.exe for automatic archive checks.')
-        self.verify_btn = button('Check archives', lambda: self.send('verify'))
-        self.verify_btn.setToolTip('Test downloaded files in this chat without a password. Confirmed failures move to wrong_archives.')
-        checks.addWidget(self.checker_btn)
-        checks.addWidget(self.verify_btn)
-        current.addLayout(checks)
         content.addWidget(current_card)
         queue_card, queue = card()
         queue_heading = QHBoxLayout()
         queue_heading.addWidget(label('Download queue', 'section'))
-        queue_heading.addStretch()
-        self.queue_caption = label('No archives yet', 'muted')
-        queue_heading.addWidget(self.queue_caption)
+        self.queue_caption = ElidedLabel('No archives yet', 'muted')
+        queue_heading.addWidget(self.queue_caption, 1)
+        self.activity_toggle = button('Activity', lambda: self.activity.setVisible(self.activity_toggle.isChecked()))
+        self.activity_toggle.setCheckable(True)
+        self.activity_toggle.setToolTip('Show or hide the session log.')
+        queue_heading.addWidget(self.activity_toggle)
         queue.addLayout(queue_heading)
-        self.overall_bar = QProgressBar()
-        self.overall_bar.setObjectName('overall')
-        self.overall_bar.setRange(0, 1000)
-        self.overall_bar.setValue(0)
-        self.overall_bar.setTextVisible(False)
-        queue.addWidget(self.overall_bar)
-        self.total_label = label('No files queued', 'muted')
+        self.total_label = ElidedLabel('No files queued', 'muted')
         queue.addWidget(self.total_label)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['ARCHIVE', 'SIZE', 'PROGRESS', 'STATUS'])
+        self.table.setHorizontalHeaderLabels(['ARCHIVE', 'TRANSFERRED', 'PROGRESS', 'STATUS'])
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -425,17 +470,11 @@ class Window(QMainWindow):
         self.table.cellClicked.connect(lambda row, col: self.watch_queue_file(row, col, -1, -1))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for index, width in [(1, 92), (2, 102), (3, 126)]:
+        for index, width in [(1, 158), (2, 112), (3, 110)]:
             self.table.setColumnWidth(index, width)
         self.table.setMinimumHeight(200)
         queue.addWidget(self.table, 1)
         content.addWidget(queue_card, 1)
-        activity_header = QHBoxLayout()
-        self.activity_toggle = button('Activity', lambda: self.activity.setVisible(self.activity_toggle.isChecked()))
-        self.activity_toggle.setCheckable(True)
-        activity_header.addWidget(self.activity_toggle)
-        activity_header.addStretch()
-        content.addLayout(activity_header)
         self.activity = QPlainTextEdit()
         self.activity.setReadOnly(True)
         self.activity.setMaximumBlockCount(500)
@@ -445,8 +484,7 @@ class Window(QMainWindow):
         content.addWidget(self.activity)
         body.addLayout(content, 1)
         page.addLayout(body, 1)
-        self.footer = label('Ready', 'muted')
-        self.footer.setWordWrap(True)
+        self.footer = ElidedLabel('Ready', 'muted')
         page.addWidget(self.footer)
 
     def boot(self):
@@ -526,8 +564,15 @@ class Window(QMainWindow):
     def update_summary(self, summary):
         self.done_value.setText(f'{summary["complete"]} / {summary["total"]}')
         self.queue_caption.setText(f'{summary["total"]:,} files · {summary["failed"]} failed · {summary.get("quarantined", 0)} quarantined')
-        self.overall_bar.setValue(round(1000 * summary['received'] / max(1, summary['bytes'])))
-        self.total_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
+        self.total_label.setText(f'{size_text(summary["bytes"])} total · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("check_failed", 0)} check errors')
+        if self.state in {'idle', 'scanning'}:
+            # The single aggregate bar also represents a restored or stopped queue.
+            # Active operations such as filename restoration own it until they finish.
+            percent = summary['received'] / max(1, summary['bytes'])
+            self.file_name.setText('Download queue' if summary['total'] else 'No archives queued')
+            self.file_bar.setValue(round(percent * 1000))
+            self.percent_label.setText(f'{percent:.0%}')
+            self.byte_label.setText(f'{size_text(summary["received"])} of {size_text(summary["bytes"])}')
 
     def render_transfers(self):
         value = self.transfers_info
@@ -535,7 +580,7 @@ class Window(QMainWindow):
         percent = summary['received'] / max(1, summary['bytes'])
         speed = value['speed'] if self.state == 'downloading' else 0
         self.file_name.setText(f"{value['active']} active downloads" if value['active'] else 'Download queue')
-        self.file_name.setToolTip('Total progress across all archives. Individual progress is shown in the queue.')
+        self.file_name.setToolTip('Total progress across all archives. Select a queue row to inspect a file below.')
         self.file_bar.setValue(round(percent * 1000))
         self.percent_label.setText(f'{percent:.0%}')
         self.byte_label.setText(f"{size_text(summary['received'])} of {size_text(summary['bytes'])}")
@@ -717,7 +762,9 @@ class Window(QMainWindow):
                 self.eta_value.setText(eta_text((value['size'] - value['done']) / value['speed'] if value['speed'] else None))
             if value['message'] in self.queue_rows:
                 row = self.queue_rows[value['message']]
+                self.table.item(row, 1).setText(f'{size_text(value["done"])} / {size_text(value["size"])}')
                 self.table.item(row, 2).setText(f'{percent:.0%}')
+                self.table.item(row, 2).setData(Qt.ItemDataRole.UserRole, percent)
                 self.table.item(row, 3).setText('Paused' if self.state == 'paused' else 'Downloading')
                 self.table.item(row, 3).setForeground(QColor('#78adff'))
             if 'summary' in value:
@@ -739,11 +786,14 @@ class Window(QMainWindow):
                               'quarantining': 'Moving…', 'quarantined': 'Quarantined'}.get(verification, 'Unchecked')
                 if row['state'] == 'downloading' and self.state == 'paused':
                     status = 'Paused'
-                texts = [row['name'], size_text(row['size']), f'{row["done"] / max(row["size"], 1):.0%}', status]
+                fraction = row['done'] / max(row['size'], 1)
+                texts = [row['name'], f'{size_text(row["done"])} / {size_text(row["size"])}', f'{fraction:.0%}', status]
                 for col, text in enumerate(texts):
                     item = QTableWidgetItem(text)
                     if col == 0:
                         item.setData(Qt.ItemDataRole.UserRole, row['message'])
+                    elif col == 2:
+                        item.setData(Qt.ItemDataRole.UserRole, fraction)
                     item.setToolTip('\n'.join(filter(None, [row['error'], row.get('verification_error'), row.get('quarantine_path') or row['path']])))
                     self.table.setItem(index, col, item)
                 self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff'}.get(row['state'], '#a6b6cc')))

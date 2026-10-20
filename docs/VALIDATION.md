@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Denser interface and informative queue — 20 October 2026
+
+The full suite ran **177 tests** on macOS with Python **3.14.8**: **176 passed, 1 skipped** (Windows DPAPI), exit code 0. Portable PowerShell launcher tests were enabled. These results describe the local candidate; they do not establish publication.
+
+Real Qt renders were inspected at 1220×850 and 1000×680, including the expanded Activity log at the smaller size. Compared with the previous committed interface at the same dimensions, the queue viewport now accommodates **20 instead of 9** full rows at the default size and **13 instead of 5** at the minimum size, with Activity collapsed. These are measured viewport capacities; demo data contains 12 archives. Actual Windows font rendering may differ.
+
+GUI checks cover visible controls at the minimum size across downloading, paused, and idle states, Activity expansion, long account/folder/status text without forced window growth, live transferred-byte and row-bar updates, and restored/stopped queue progress. Filename restoration keeps its own temporary progress until the next idle queue snapshot restores the aggregate display. Existing selection/follow behavior, background verification, QR rendering, and worker shutdown tests remain passing. The documentation preview was refreshed.
+
+No actual Windows desktop, live Telegram session, or real WinRAR was used. Windows acceptance should check control labels and queue readability at the user's display scaling, selecting/pinning files, opening Activity, Pause/Resume, and the relocated sidebar archive-check controls.
+
 ## Separate per-file progress bar — 20 October 2026
 
 The full suite ran **175 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 174 with Windows DPAPI skipped; Python **3.15.0** passed 173 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled.
