@@ -1,5 +1,21 @@
 # Validation and release limits
 
+## Simpler progress layout — 20 October 2026
+
+Removed the redundant selected-file bar, its heading, and Follow active control. The overall bar and active-transfer tiles remain, with six-pixel gaps between tiles. Percentage text adapts to narrow tiles. The queue receives the space freed by the removed controls.
+
+The final release candidate ran **188 tests per runtime** on macOS with portable PowerShell. Python **3.14.8** passed **187**, with Windows DPAPI skipped; Python **3.15.0** passed **186**, with Windows DPAPI and unavailable cryptg skipped. Both suites exited successfully. The Python 3.14 interpreter probe and syntax checks also passed. Obsolete pin/follow tests were replaced with checks that queue selection preserves active-file and overall progress, and that files outside the displayed page still update their tile. The tests verify that only the overall and active-file progress widgets remain, all twenty percentages fit, and neighboring tiles have the wider gaps. The default 1220×850 preview and the 1000×680 layout with twenty transfers were inspected visually; resizing back and forth preserved readable percentages. No real Windows or Telegram session was used.
+
+## Live parallel download limit — 20 October 2026
+
+The candidate ran **190 tests per runtime** on macOS with portable PowerShell enabled. Python **3.14.8** passed **189**, with Windows DPAPI skipped; Python **3.15.0** passed **188**, with Windows DPAPI and unavailable cryptg skipped. Both suites exited successfully.
+
+A twelve-file controlled transfer test grows the pool from two to five, reduces it to two without cancellations, and verifies that slots refill only below the target. Rapid limit changes settle at the latest value; every archive is claimed once. Another fixture changes the limit while paused, confirms no extra downloads start until Resume, and proves increasing the limit after Finish current does not bypass the stop request. A fatal disk-error test checks that no further file is claimed and all active transfers are cleaned up. The real-file partial-transfer test now grows from one to three and lowers the limit before Pause/Stop, then reopens SQLite and resumes all saved partials.
+
+Settings reload preserves the new limit. Offscreen UI checks cover live dropdown commands, active-count/limit labels, preserved per-file and aggregate progress, pause, and Finish current. Normal (1220×850) and minimum (1000×680) layouts were visually inspected, including more active files than the new limit and a paused operation with Activity expanded. The default preview was refreshed.
+
+These are local/offscreen checks and simulated network transfers, not a Windows or live Telegram run. On Windows, verify raising/lowering the limit during real transfers, Pause/Resume, Finish current, immediate Stop/close and restart, and automatic WinRAR checks after downloads complete.
+
 ## Finish current downloads — 20 October 2026
 
 The candidate ran **186 tests per runtime** on macOS with portable PowerShell enabled. Python **3.14.8** passed **185**, with Windows DPAPI skipped; Python **3.15.0** passed **184**, with Windows DPAPI and unavailable cryptg skipped. Both suites exited successfully. The Python 3.14 interpreter probe and syntax checks also passed.

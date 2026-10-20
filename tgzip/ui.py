@@ -3,8 +3,8 @@ import time
 from pathlib import Path
 import qrcode
 from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF, QIntValidator
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF, QIntValidator
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
@@ -37,7 +37,6 @@ QComboBox { padding-right: 28px; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
 QComboBox::drop-down { width: 24px; border: none; }
 QComboBox::down-arrow { image: none; width: 0; height: 0; }
-QCheckBox { background: transparent; }
 QProgressBar { background: #26334a; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
 QProgressBar::chunk { background: #5c9aff; border-radius: 3px; }
 QProgressBar#overall::chunk { background: #48cbb5; }
@@ -138,6 +137,16 @@ class ActiveTransfer(QWidget):
         layout.addWidget(self.percent)
         layout.addWidget(self.name)
         layout.addWidget(self.bar)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Keep 100% readable even with twenty tiles at the minimum window width.
+        font = QFont(self.percent.font())
+        for pixels in (12, 11, 10, 9):
+            font.setPixelSize(pixels)
+            if QFontMetrics(font).horizontalAdvance('100%') <= self.width():
+                break
+        self.percent.setStyleSheet(f'font-size: {pixels}px; font-weight: 600; background: transparent;')
 
     def update_job(self, job, paused=False):
         fraction = max(0, min(1, job['done'] / max(1, job['size'])))
@@ -323,7 +332,6 @@ class Window(QMainWindow):
         self.queue_request = 0
         self.demo_rows = []
         self.demo_summary = None
-        self.watched_job = None
         self.qr_dialog = None
         self.password_dialog = None
         self.closing = False
@@ -428,7 +436,7 @@ class Window(QMainWindow):
         for count in range(1, 21):
             self.parallel_box.addItem(str(count), count)
         self.parallel_box.setCurrentIndex(19)
-        self.parallel_box.setToolTip('Simultaneous downloads. Stop the queue before changing this setting.')
+        self.parallel_box.setToolTip('Change the limit live. Increasing starts more files; decreasing lets active files finish. Paused downloads wait for Resume.')
         self.parallel_box.currentIndexChanged.connect(
             lambda: self.send('parallel', value=self.parallel_box.currentData()))
         parallel_row.addWidget(self.parallel_box)
@@ -490,26 +498,9 @@ class Window(QMainWindow):
         self.active_strip.setObjectName('transparent')
         self.active_layout = QHBoxLayout(self.active_strip)
         self.active_layout.setContentsMargins(0, 0, 0, 0)
-        self.active_layout.setSpacing(1)
+        self.active_layout.setSpacing(6)
         self.active_strip.hide()
         current.addWidget(self.active_strip)
-        archive_heading = QHBoxLayout()
-        archive_heading.addWidget(label('File', 'muted'))
-        self.archive_name = ElidedLabel('No file selected', 'muted')
-        archive_heading.addWidget(self.archive_name, 1)
-        self.archive_detail = label('—', 'muted')
-        archive_heading.addWidget(self.archive_detail)
-        self.archive_follow = QCheckBox('Follow active')
-        self.archive_follow.setChecked(True)
-        self.archive_follow.setToolTip('Follow one active download automatically. Select a queue row to inspect a specific file.')
-        self.archive_follow.toggled.connect(lambda: self.render_archive())
-        archive_heading.addWidget(self.archive_follow)
-        current.addLayout(archive_heading)
-        self.archive_bar = QProgressBar()
-        self.archive_bar.setRange(0, 1000)
-        self.archive_bar.setValue(0)
-        self.archive_bar.setTextVisible(False)
-        current.addWidget(self.archive_bar)
         controls = QHBoxLayout()
         self.scan_btn = button('Scan archives', lambda: self.send('scan'))
         self.start_btn = button('▶  Start', lambda: self.send('start'), True)
@@ -551,8 +542,6 @@ class Window(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.currentCellChanged.connect(self.watch_queue_file)
-        self.table.cellClicked.connect(lambda row, col: self.watch_queue_file(row, col, -1, -1))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index, width in [(1, 158), (2, 112), (3, 110)]:
@@ -665,7 +654,7 @@ class Window(QMainWindow):
         self.connect_btn.setVisible(not self.account)
         self.settings_btn.setEnabled(idle)
         self.update_btn.setEnabled(idle)
-        self.parallel_box.setEnabled(idle)
+        self.parallel_box.setEnabled(self.state != 'updating')
         self.logout_btn.setEnabled(idle and bool(self.account))
         self.logout_btn.setVisible(bool(self.account))
         self.refresh_btn.setEnabled(idle and bool(self.account))
@@ -696,8 +685,8 @@ class Window(QMainWindow):
         summary = value['summary']
         percent = summary['received'] / max(1, summary['bytes'])
         speed = value['speed'] if self.state == 'downloading' else 0
-        self.file_name.setText(f"{value['active']} active downloads" if value['active'] else 'Download queue')
-        self.file_name.setToolTip('Total progress across all archives. Select a queue row to inspect a file below.')
+        self.file_name.setText(f"{value['active']} active · Limit {self.parallel_box.currentData()}" if value['active'] else 'Download queue')
+        self.file_name.setToolTip('Total progress across all archives. Active files are shown below and individual progress is available in the queue.')
         self.file_bar.setValue(round(percent * 1000))
         self.percent_label.setText(f'{percent:.0%}')
         self.byte_label.setText(f"{size_text(summary['received'])} of {size_text(summary['bytes'])}")
@@ -714,14 +703,11 @@ class Window(QMainWindow):
         self.queue_pages = 1
         self.update_pager(force=True)
         self.render_active_transfers()
-        self.watched_job = None
         self.table.blockSignals(True)
         self.table.clearSelection()
         self.table.setCurrentCell(-1, -1)
         self.table.setRowCount(0)
         self.table.blockSignals(False)
-        self.archive_follow.setChecked(True)
-        self.render_archive()
 
     def render_active_transfers(self):
         for message in list(self.transfer_tiles):
@@ -785,35 +771,6 @@ class Window(QMainWindow):
         self.on_event('queue', dict(rows=rows[page * QUEUE_PAGE_SIZE:(page + 1) * QUEUE_PAGE_SIZE],
                                    summary=self.demo_summary, mode=mode, page=page, pages=pages,
                                    matching=len(rows), request=self.queue_request))
-
-    def watch_queue_file(self, row, column, previous_row, previous_column):
-        item = self.table.item(row, 0) if row >= 0 else None
-        if item is None:
-            return
-        message = item.data(Qt.ItemDataRole.UserRole)
-        job = self.active_files.get(message) or self.queue_jobs.get(message)
-        if job is not None:
-            self.watched_job = dict(job)
-            self.archive_follow.setChecked(False)
-            self.render_archive()
-
-    def render_archive(self):
-        message = self.watched_job['message'] if self.watched_job else None
-        if self.archive_follow.isChecked() and self.active_files and message not in self.active_files:
-            message = next(iter(self.active_files))
-        job = self.active_files.get(message) or self.queue_jobs.get(message) or self.watched_job
-        if job is None:
-            self.archive_name.setText('No file selected')
-            self.archive_name.setToolTip('Select an archive in the queue to see its progress.')
-            self.archive_detail.setText('—')
-            self.archive_bar.setValue(0)
-            return
-        self.watched_job = dict(job)
-        percent = max(0, min(1, job['done'] / max(1, job['size'])))
-        self.archive_name.setText(job['name'])
-        self.archive_name.setToolTip(job['name'] + '\n' + (job.get('quarantine_path') or job['path']))
-        self.archive_detail.setText(f"{size_text(job['done'])} / {size_text(job['size'])} · {percent:.0%}")
-        self.archive_bar.setValue(round(percent * 1000))
 
     def update_verification_indicator(self):
         if self.verification_info:
@@ -900,6 +857,8 @@ class Window(QMainWindow):
             self.parallel_box.blockSignals(True)
             self.parallel_box.setCurrentIndex(parallel_downloads(value.get('parallel_downloads')) - 1)
             self.parallel_box.blockSignals(False)
+            if self.transfers_info is not None and self.state in {'downloading', 'paused', 'verifying'}:
+                self.render_transfers()
             self.folder = value.get('download_dir', '')
             self.folder_label.setText(Path(self.folder).name if self.folder else 'Choose a download folder')
             self.folder_label.setToolTip(self.folder)
@@ -943,7 +902,7 @@ class Window(QMainWindow):
                 self.byte_label.setText('Choose a chat → Scan archives → Start')
                 self.on_event('speed_reset', None)
         elif name == 'progress':
-            for job in (self.active_files.get(value['message']), self.queue_jobs.get(value['message']), self.watched_job):
+            for job in (self.active_files.get(value['message']), self.queue_jobs.get(value['message'])):
                 if job is not None and job['message'] == value['message']:
                     job.update(done=value['done'], size=value['size'])
             if value['message'] in self.transfer_tiles and value['message'] in self.active_files:
@@ -1053,8 +1012,6 @@ class Window(QMainWindow):
         elif name == 'closed':
             self.can_close = True
             self.close()
-        if name in {'transfers', 'progress', 'queue', 'state', 'selected', 'account'}:
-            self.render_archive()
         if name in {'transfers', 'state'}:
             self.render_active_transfers()
         if self.finish_requested and self.state in {'downloading', 'paused', 'verifying'}:

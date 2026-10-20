@@ -26,10 +26,10 @@ Intermediate download progress is batched into one database transaction about on
 
 ## What is included
 
-- Compact dark interface with dense queue rows, downloaded/total bytes and inline progress bars for each archive, overall and selected-file progress, speed, time remaining, and a collapsible Activity log.
-- A separate **File** progress bar shows one archive's name, downloaded bytes, and percentage. Select a queue row to inspect it, or keep **Follow active** enabled to follow downloads automatically.
+- Compact dark interface with dense queue rows, downloaded/total bytes and inline progress bars for each archive, overall and active-file progress, speed, time remaining, and a collapsible Activity log.
 - A single horizontal row shows a separate progress bar and percentage for every active download, including while browsing other queue pages.
 - The queue opens in **Unfinished** mode. Switch to **Downloaded** or **All** and browse the entire saved history in pages of 200 files, with direct page-number navigation.
+- **Parallel downloads** changes live from 1 to 20. Raising it starts more files; lowering it lets active files finish before new ones start. The active count and selected limit are shown together.
 - **Speed limit** dropdown: Unlimited by default, or 10 / 5 / 2 / 1 / 0.5 / 0.25 MB/s shared across all downloads. Change it live; the choice is remembered.
 - **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.

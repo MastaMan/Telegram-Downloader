@@ -99,7 +99,7 @@ On the first launch after upgrading from the ZIP-only release, scan checkpoints 
 
 The scan checkpoint is saved after each processed message. Stop, close, or restart the app, then click Scan archives to continue. Later scans look for newer messages, so they do not need to re-read the full history. They do **not** revisit older edited messages. A file whose document ID or size changed after discovery is reported as failed instead of appending different content to an existing partial file.
 
-Click **Start** after scanning to process the saved queue with up to **20 simultaneous downloads** by default. Use **Parallel downloads** under the destination folder to choose a limit from 1 to 20. Stop the queue before changing the limit; your selection is saved between launches. Each free slot starts the next archive immediately, without waiting for the other downloads to finish. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
+Click **Start** after scanning to process the saved queue with up to **20 simultaneous downloads** by default. Use **Parallel downloads** under the destination folder to choose a limit from 1 to 20. Change the limit while downloading or paused; your selection is saved between launches. Raising the limit starts extra files immediately unless paused or Finish current is active. Lowering it never interrupts a file: current downloads finish, and new ones start only when the active count falls below the new limit. For example, changing 10 to 3 keeps all ten current downloads, then settles at three. The header shows the actual count and target, such as **8 active · Limit 3**. Changes while paused take effect on Resume; changes during Finish current are saved for the next Start and do not restart the queue. Each available slot starts the next archive without waiting for the other downloads to finish. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
 
 Use **Speed limit** in the same sidebar to select **Unlimited** (default), **10 MB/s**, **5 MB/s**, **2 MB/s**, **1 MB/s**, **0.5 MB/s**, or **0.25 MB/s**. This is the combined archive-download limit across all active files, not a separate allowance for each file. It is saved between launches and can be changed while downloading or paused. Selecting Unlimited wakes transfers waiting for bandwidth; changing this setting does not resume a paused queue.
 
@@ -109,9 +109,7 @@ The compact interface gives most of the window to the queue. Shorter controls an
 
 Below the overall metrics, a single horizontal row shows **one progress bar for each active download**. Two simultaneous downloads show two bars; ten show ten, up to the 20-download limit. Percentages stay visible; long names are shortened to fit. Hover over a tile for its full filename, byte counts, status, and saved path. The row updates independently of the queue page and filter. Pause retains its progress; completed/stopped transfers leave the row as their slots close.
 
-The separate **File** bar beneath that row shows one archive's name, downloaded/total bytes, and percentage. **Follow active** is enabled by default: the display stays on one active file, then switches when that file finishes or stops. It also works for active files outside the currently displayed page.
-
-Click an archive row (or select it with the keyboard) to pin that file's progress. This disables Follow active and does not change the overall progress or downloads. Completed files remain visible at 100%; queued files show their saved progress. Enable **Follow active** to return to automatic tracking. Pause/Stop retain the last progress, and changing chats clears the watched file. Hover over its name for the full name and saved path.
+The active bars have wider gaps to keep files visually separate. There is one overall bar and one bar per active file; the controls sit directly below them. Individual progress and byte counts for queued or completed files remain in the table. Selecting a row does not change the upper bars.
 
 The interface shows:
 
@@ -119,7 +117,6 @@ The interface shows:
 | --- | --- |
 | Main download bar | Received bytes across the full queue; the title shows the number of active downloads |
 | Active download row | Independent progress and percentage for every currently active transfer |
-| File bar | Progress of one automatically followed or explicitly selected archive, with its name and byte counts |
 | Transferred | Downloaded bytes / full size for each archive, updated during transfer |
 | Row progress | A small progress bar and percentage for each individual archive |
 | Transfer speed | Combined recent speed of active downloads; resets when paused or stalled |
@@ -145,7 +142,7 @@ The table displays **200 matching archives per page**, with no 1,000-file histor
 
 Active downloads appear first, followed by archives currently being checked when the filter includes downloaded files, then unfinished archives in message order, and completed history. On the first Unfinished page, active downloads are followed by the next queued/retry candidates. Start continues using its existing queue order; changing pages never changes scheduling.
 
-Pages are live: finishing or starting files can move rows, and an emptied last page moves back to the last remaining page. Changing filters or chats returns to page 1. The upper row of active download bars remains visible even when you browse completed history or a later page. Selecting a row pins the separate File bar by file identity across page refreshes.
+Pages are live: finishing or starting files can move rows, and an emptied last page moves back to the last remaining page. Changing filters or chats returns to page 1. The upper row of active download bars remains visible even when you browse completed history or a later page. Row selection is preserved by file identity when the current page refreshes.
 
 ### Password and integrity checks
 

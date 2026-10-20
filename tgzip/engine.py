@@ -82,6 +82,7 @@ class Engine:
         self.task = None
         self.kind = None
         self.finish_requested = False
+        self.download_wake = asyncio.Event()
         self.gate = asyncio.Event()
         self.gate.set()
         self.password_future = None
@@ -153,6 +154,7 @@ class Engine:
             if self.kind == 'downloading' and not self.finish_requested:
                 # No await: workers cannot claim another archive after this flag.
                 self.finish_requested = True
+                self.download_wake.set()
                 self.emit('finish_current', True)
                 self.emit('log', 'Finishing current downloads and pending archive checks. No new downloads will start. Resume if paused.')
             return
@@ -166,6 +168,7 @@ class Engine:
         if command == 'resume':
             self.limiter.reset()
             self.gate.set()
+            self.download_wake.set()
             if self.kind:
                 self.emit('state', self.kind)
             return
@@ -223,10 +226,9 @@ class Engine:
                 self.save_settings()
                 self.emit('settings', self.settings)
             elif command == 'parallel':
-                if self.task and not self.task.done():
-                    raise TransferError('Stop the current operation before changing parallel downloads.')
                 self.settings['parallel_downloads'] = parallel_downloads(args['value'])
                 self.save_settings()
+                self.download_wake.set()
                 self.emit('settings', self.settings)
             elif command == 'speed_limit':
                 self.settings['speed_limit'] = speed_limit(args['value'])
@@ -562,28 +564,46 @@ class Engine:
         after = 0
         filenames = self.store.filename_allocator()
 
-        async def worker():
-            nonlocal after
-            while True:
-                if self.finish_requested:
-                    return
-                await self.gate.wait()
-                if self.finish_requested:
-                    return
-                # Claim without yielding: all workers and SQLite share this event loop.
-                # The cursor advances even on failure, so retries wait for the next Start.
-                job = self.store.next_job(account, chat, after)
-                if job is None:
-                    return
-                after = job['message']
-                await self.download_job(job, wake, account, chat, filenames)
-
+        active = 0
+        failed = False
         finished = asyncio.Event()
 
+        async def transfer(job):
+            nonlocal active, failed
+            try:
+                await self.download_job(job, wake, account, chat, filenames)
+            except BaseException:
+                # Stop claiming immediately, before TaskGroup propagates failure/cancellation.
+                failed = True
+                raise
+            finally:
+                active -= 1
+                self.download_wake.set()
+
         async def workers():
+            nonlocal after, active
+            exhausted = False
+            # Only claimed files own tasks, bounded by the maximum live limit of 20.
+            # Lowering the limit drains existing transfers without canceling them.
             async with asyncio.TaskGroup() as tasks:
-                for index in range(parallel_downloads(self.settings.get('parallel_downloads'))):
-                    tasks.create_task(worker(), name=f'Download {index + 1}')
+                while True:
+                    self.download_wake.clear()
+                    if failed:
+                        break
+                    limit = parallel_downloads(self.settings.get('parallel_downloads'))
+                    if self.gate.is_set() and not self.finish_requested and not exhausted:
+                        while active < limit:
+                            # Selection, cursor advance and slot reservation never yield.
+                            job = self.store.next_job(account, chat, after)
+                            if job is None:
+                                exhausted = True
+                                break
+                            after = job['message']
+                            active += 1
+                            tasks.create_task(transfer(job), name=f'Download {after}')
+                    if active == 0 and (exhausted or self.finish_requested):
+                        break
+                    await self.download_wake.wait()
             finished.set()
 
         async def report_progress():
