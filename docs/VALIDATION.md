@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Shared download speed limit — 20 October 2026
+
+The full suite ran **170 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 169 with Windows DPAPI skipped; Python **3.15.0** passed 168 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled. The real Qt interface was rendered at 1220×850 and 1000×680; the Speed limit dropdown fits beneath Parallel downloads without reducing the queue area.
+
+New tests verify the seven presets and Unlimited default, persistence across engine restart, changes during active work and pause, and one limiter shared by all twenty workers. A timed aggregate-budget test requires twenty 4 KiB requests at 0.25 MB/s to spend the shared 0.3125-second budget rather than receiving twenty independent allowances. Other async checks cover live increase/decrease, switching to Unlimited, cancellation of the first waiter, pause/resume without accumulated credit, and reading no network chunks before allowance is granted. A canceled real-file transfer preserves its partial and later finishes with identical bytes. UI tests check all dropdown labels, live availability, selection commands, and restoring settings without signal loops.
+
+No real Telegram throughput or Windows networking was measured. Windows acceptance: choose each limit while several large archives download, compare sustained combined throughput over at least a minute, change limits live, pause/resume, stop/restart, and verify the saved selection. Allow for 512 KiB chunk bursts, requests already in flight, network overhead, and Telegram's own limits; this is archive-request pacing rather than an operating-system traffic shaper.
+
 ## Automatically restore completed legacy filenames — 20 October 2026
 
 The full suite ran **157 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 156 with Windows DPAPI skipped; Python **3.15.0** passed 155 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled. The new restoration view was rendered with real Qt offscreen and visually inspected: archive count, percentage, progress bar, Pause, and Stop are visible and consistent.

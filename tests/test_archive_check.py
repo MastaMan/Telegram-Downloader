@@ -221,7 +221,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.engine.store.update(1, -10, 9, state='queued', done=0)
         self.source.unlink()
         entered = asyncio.Event()
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             self.source.write_bytes(b'fixture archive bytes')
             progress(job['size'], 0)
         async def check(*args):
@@ -253,7 +253,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.engine.settings['parallel_downloads'] = 1
         checking, downloaded, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         checked = []
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             if job['message'] == 10:
                 await checking.wait()
             Path(job['path']).write_bytes(b'fixture archive bytes')
@@ -288,7 +288,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.prepare_downloads()
         process = Process(hang=True)
         downloading, stopped = asyncio.Event(), asyncio.Event()
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             if job['message'] == 9:
                 Path(job['path']).write_bytes(b'fixture archive bytes')
             else:
@@ -315,7 +315,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.prepare_downloads()
         process = Process(hang=True)
         next_download, proceed = asyncio.Event(), asyncio.Event()
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             if job['message'] == 10:
                 next_download.set()
                 await proceed.wait()
@@ -340,7 +340,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_fatal_download_error_cancels_checker_and_reports_original_cause(self):
         self.prepare_downloads()
         process = Process(hang=True)
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             if job['message'] == 9:
                 Path(job['path']).write_bytes(b'fixture archive bytes')
             else:

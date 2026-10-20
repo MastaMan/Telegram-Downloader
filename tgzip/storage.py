@@ -7,6 +7,16 @@ from collections import Counter
 from pathlib import Path
 
 CHUNK = 512 * 1024
+SPEED_LIMITS = (0, 10, 5, 2, 1, 0.5, 0.25)
+
+
+def speed_limit(value=None):
+    """Saved limits are MB/s (binary megabytes); zero means unlimited."""
+    try:
+        limit = float(value)
+        return limit if limit in SPEED_LIMITS else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def parallel_downloads(value=None):

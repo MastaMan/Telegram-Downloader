@@ -99,6 +99,10 @@ The scan checkpoint is saved after each processed message. Stop, close, or resta
 
 Click **Start** after scanning to process the saved queue with up to **20 simultaneous downloads** by default. Use **Parallel downloads** under the destination folder to choose a limit from 1 to 20. Stop the queue before changing the limit; your selection is saved between launches. Each free slot starts the next archive immediately, without waiting for the other downloads to finish. Start also retries failed items once per queue pass. Completed downloads are skipped. Any pending archive checks are resumed alongside new downloads.
 
+Use **Speed limit** in the same sidebar to select **Unlimited** (default), **10 MB/s**, **5 MB/s**, **2 MB/s**, **1 MB/s**, **0.5 MB/s**, or **0.25 MB/s**. This is the combined archive-download limit across all active files, not a separate allowance for each file. It is saved between launches and can be changed while downloading or paused. Selecting Unlimited wakes transfers waiting for bandwidth; changing this setting does not resume a paused queue.
+
+The limit uses the same binary units as the progress display: 1 MB/s means 1,048,576 archive bytes per second. Requests are paced in chunks of up to 512 KiB, so short bursts and fluctuating displayed speeds are normal. Requests already in flight when you lower the limit may finish; the new budget applies to subsequent requests. Network/protocol overhead, Telegram metadata, and application-update downloads are outside this limit. Pause, Stop, and closing the window interrupt bandwidth waits and preserve partial files.
+
 The compact interface gives most of the window to the queue. **Activity** expands or collapses the session log; it is collapsed by default. Extra explanations are available in tooltips.
 
 The interface shows:
@@ -190,7 +194,7 @@ To remove the application, sign out first if possible, close it, then delete its
 | Channel missing | Confirm account ID and access in the official app, then Refresh chats. |
 | No files found | Check that attachments have `.zip` / `.rar` names, or a matching MIME type when nameless. Scan only processes messages newer than its saved checkpoint. |
 | Telegram rate limit | Activity shows the required wait. Leave it running, or Stop and try later. |
-| Slow downloads | Speed depends on Telegram, your connection and account limits. Use Parallel downloads to choose 1–20 simultaneous transfers. More transfers do not guarantee proportionally more speed; reduce the limit if Telegram repeatedly asks you to wait. |
+| Slow downloads | Check that Speed limit is Unlimited if you want maximum throughput. Speed also depends on Telegram, your connection and account limits. Use Parallel downloads to choose 1–20 simultaneous transfers. More transfers do not guarantee proportionally more speed; reduce concurrency if Telegram repeatedly asks you to wait. |
 | Disk full or permission error | Free space or restore permission for the recorded path, then Start. Existing queue entries do not change paths when the base folder changes. |
 | Unchecked | Install WinRAR, select WinRAR.exe with WinRAR…, then click Check archives. |
 | Check failed | Hover over the row. Check permissions, file existence, available memory, and WinRAR installation. Multipart sets require a manual test. |
@@ -200,7 +204,7 @@ To remove the application, sign out first if possible, close it, then delete its
 
 ## 12. Known limits
 
-Windows is required for real account storage. Other operating systems can preview the GUI and run most tests using demo mode. A custom Telegram proxy configuration screen, continuous monitoring for new messages, bandwidth limiting, parallel file downloads, password-protected archive extraction, automatic multipart assembly, general old-history rescanning, and automatic recovery of deleted completed files are not included. First-run dependency installation and real Telegram account flows should be verified on your Windows machine before unattended use.
+Windows is required for real account storage. Other operating systems can preview the GUI and run most tests using demo mode. A custom Telegram proxy configuration screen, continuous monitoring for new messages, password-protected archive extraction, automatic multipart assembly, general old-history rescanning, and automatic recovery of deleted completed files are not included. First-run dependency installation and real Telegram account flows should be verified on your Windows machine before unattended use.
 
 ## 13. Check updates
 

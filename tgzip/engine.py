@@ -10,8 +10,8 @@ from telethon.sessions import StringSession
 from telethon.crypto import aes
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
-from .storage import parallel_downloads, Store, atomic_write, load_settings, safe_name, archive_extension
-from .transfer import download, TransferError
+from .storage import parallel_downloads, speed_limit, Store, atomic_write, load_settings, safe_name, archive_extension
+from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
 from updater import UpdateError, prepare_update, load_plan
@@ -87,6 +87,7 @@ class Engine:
         self.closing = False
         self.control = asyncio.Lock()
         self.transfers = {}
+        self.limiter = DownloadLimiter(self.settings.get('speed_limit'))
 
     def save_settings(self):
         atomic_write(self.settings_path, json.dumps(self.settings, indent=2).encode('utf-8'))
@@ -106,6 +107,7 @@ class Engine:
             await asyncio.gather(self.task, return_exceptions=True)
         self.task = None
         self.gate.set()
+        self.limiter.reset()
 
     def launch(self, kind, fn):
         if self.task and not self.task.done():
@@ -137,10 +139,12 @@ class Engine:
         if command == 'pause':
             if self.kind in {'downloading', 'scanning', 'verifying', 'renaming'}:
                 self.gate.clear()
+                self.limiter.reset()
                 self.store.flush_progress()
                 self.emit('state', 'paused')
             return
         if command == 'resume':
+            self.limiter.reset()
             self.gate.set()
             if self.kind:
                 self.emit('state', self.kind)
@@ -194,6 +198,11 @@ class Engine:
                     raise TransferError('Stop the current operation before changing parallel downloads.')
                 self.settings['parallel_downloads'] = parallel_downloads(args['value'])
                 self.save_settings()
+                self.emit('settings', self.settings)
+            elif command == 'speed_limit':
+                self.settings['speed_limit'] = speed_limit(args['value'])
+                self.save_settings()
+                self.limiter.set_limit(self.settings['speed_limit'])
                 self.emit('settings', self.settings)
             elif command == 'scan':
                 if self.chat and self.account:
@@ -613,7 +622,7 @@ class Engine:
                     if str(message.document.id) != job['document'] or message.document.size != job['size']:
                         raise TransferError('The attachment changed since scanning. The old partial file was preserved.')
                     self.prepare_filename(job, message, filenames)
-                    await download(self.client, message, job, self.gate, progress)
+                    await download(self.client, message, job, self.gate, progress, limiter=self.limiter)
                     break
                 except errors.FloodWaitError as exc:
                     self.emit('log', f'Telegram rate limit: waiting {exc.seconds} seconds. Stop remains available.')

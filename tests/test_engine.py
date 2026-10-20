@@ -147,7 +147,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.store.update(123, -100, 1, naming_version=1)
         original = self.root / '1.zip'
         original.write_bytes(b'X' * 100)
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             self.assertEqual(Path(job['path']).name, '__dup_2__1.zip')
             Path(job['path']).write_bytes(b'Y' * 100)
         with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
@@ -249,7 +249,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         async def get_messages(*args, **kwargs):
             calls.append('message')
             return SimpleNamespace(document=SimpleNamespace(id=111, size=100))
-        async def transfer(*args):
+        async def transfer(*args, **kwargs):
             if calls.count('message') == 1:
                 raise errors.FileReferenceExpiredError(request=None)
         async def no_wait(*args):
@@ -276,7 +276,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Queue()
         active, visited = set(), []
         peak = 0
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             nonlocal peak
             number = job['message']
             active.add(number)
@@ -376,7 +376,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             original_flush()
             if pending:
                 checkpointed.set()
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             statements.clear()
             with patch.object(self.engine.store, 'summary', wraps=self.engine.store.summary) as summary:
                 for done in range(1, 801):
@@ -402,7 +402,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         from tgzip.transfer import TransferError
         self.queue_files(25)
         visited = []
-        async def transfer(client, message, job, gate, progress):
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
             visited.append(job['message'])
             await asyncio.sleep(0)
             if job['message'] == 2:
@@ -425,6 +425,38 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TransferError):
             await self.engine.command('parallel', value=10)
         self.assertEqual(self.engine.settings['parallel_downloads'], 5)
+
+    async def test_speed_limit_can_change_while_busy_and_survives_restart(self):
+        self.assertEqual(self.engine.limiter.rate, 0)
+        self.engine.launch('downloading', lambda: asyncio.sleep(60))
+        await asyncio.sleep(0)
+        await self.engine.command('speed_limit', value=.25)
+        self.assertEqual(self.engine.limiter.rate, 256 * 1024)
+        self.assertEqual(json.loads(self.engine.settings_path.read_text())['speed_limit'], .25)
+        await self.engine.command('pause')
+        await self.engine.command('speed_limit', value=5)
+        self.assertFalse(self.engine.gate.is_set())
+        await self.engine.cancel()
+        reopened = Engine(self.root, lambda *args: None)
+        try:
+            self.assertEqual(reopened.limiter.rate, 5 * 1024 * 1024)
+        finally:
+            reopened.store.close()
+        await self.engine.command('speed_limit', value=0)
+        self.assertEqual(self.engine.limiter.rate, 0)
+
+    async def test_all_downloads_receive_same_live_limiter(self):
+        self.queue_files(20)
+        await self.engine.command('speed_limit', value=2)
+        seen = []
+        async def transfer(client, message, job, gate, progress, *, limiter):
+            seen.append(limiter)
+            await asyncio.sleep(0)
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            await self.engine.download_queue()
+        self.assertEqual(len(seen), 20)
+        self.assertTrue(all(limiter is self.engine.limiter for limiter in seen))
+        self.assertEqual(self.engine.limiter.rate, 2 * 1024 * 1024)
 
     async def test_qr_expiry_two_factor_retry_and_password_not_saved(self):
         engine = self.engine

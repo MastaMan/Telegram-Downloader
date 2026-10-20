@@ -3,14 +3,56 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from .storage import CHUNK, resume_offset
+from .storage import CHUNK, resume_offset, speed_limit
 
 
 class TransferError(Exception):
     pass
 
 
-async def download(client, message, job, gate, progress):
+class DownloadLimiter:
+    """One shared token budget for all transfers, charged before network reads."""
+    def __init__(self, limit=0):
+        self.lock = asyncio.Lock()
+        self.changed = asyncio.Event()
+        self.set_limit(limit)
+
+    def set_limit(self, limit):
+        self.rate = speed_limit(limit) * 1024 * 1024
+        self.reset()
+
+    def reset(self):
+        # Pause, Stop and live changes never bank credit for a later burst.
+        self.tokens = 0.0
+        self.updated = time.monotonic()
+        self.changed.set()
+        self.changed = asyncio.Event()
+
+    async def acquire(self, amount, gate):
+        if not 0 < amount <= CHUNK:
+            raise ValueError('Rate-limit requests must fit one download chunk.')
+        while True:
+            await gate.wait()
+            # Lock fairness distributes the shared budget among waiting files.
+            async with self.lock:
+                while gate.is_set():
+                    if not self.rate:
+                        return
+                    now = time.monotonic()
+                    self.tokens = min(CHUNK, self.tokens + (now - self.updated) * self.rate)
+                    self.updated = now
+                    if self.tokens >= amount:
+                        self.tokens -= amount
+                        return
+                    changed = self.changed
+                    delay = (amount - self.tokens) / self.rate
+                    try:
+                        await asyncio.wait_for(changed.wait(), timeout=delay)
+                    except asyncio.TimeoutError:
+                        pass
+
+
+async def download(client, message, job, gate, progress, *, limiter=None):
     target = Path(job['path'])
     part = Path(job.get('partial_path') or target.with_name(target.name + '.part'))
     if len((target.name + '.part').encode('utf-16-le')) // 2 > 255:
@@ -51,6 +93,8 @@ async def download(client, message, job, gate, progress):
                         await gate.wait()
                         window_time, window_bytes = time.monotonic(), 0
                     try:
+                        if limiter is not None:
+                            await limiter.acquire(min(CHUNK, expected - offset), gate)
                         # Cancellation interrupts stalled network reads as well as pauses.
                         chunk = await asyncio.wait_for(iterator.__anext__(), timeout=60)
                     except StopAsyncIteration:

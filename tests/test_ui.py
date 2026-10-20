@@ -7,6 +7,7 @@ import time
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QPushButton
 from shiboken6 import delete, isValid
@@ -71,6 +72,23 @@ class UITests(unittest.TestCase):
         window.on_event('state', 'idle')
         self.assertTrue(window.start_btn.isEnabled())
         self.assertFalse(window.stop_btn.isEnabled())
+        window.close()
+
+    def test_speed_limit_presets_stay_available_during_downloads_and_pause(self):
+        window = Window(demo=True)
+        self.assertEqual([window.speed_box.itemText(index) for index in range(window.speed_box.count())],
+                         ['Unlimited', '10 MB/s', '5 MB/s', '2 MB/s', '1 MB/s', '0.5 MB/s', '0.25 MB/s'])
+        self.assertEqual(window.speed_box.currentData(), 0)
+        self.assertTrue(window.speed_box.isEnabled())
+        with patch.object(window, 'send') as send:
+            window.speed_box.setCurrentIndex(6)
+            send.assert_called_once_with('speed_limit', value=.25)
+            send.reset_mock()
+            window.on_event('settings', {'speed_limit': 5})
+            send.assert_not_called()
+            self.assertEqual(window.speed_box.currentData(), 5)
+        window.on_event('state', 'paused')
+        self.assertTrue(window.speed_box.isEnabled())
         window.close()
 
     def test_filename_restoration_has_clear_status_and_pause_stop_controls(self):

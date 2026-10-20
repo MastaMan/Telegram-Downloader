@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
-from .storage import parallel_downloads
+from .storage import parallel_downloads, speed_limit, SPEED_LIMITS
 
 STYLE = '''
 QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 13px; }
@@ -313,6 +313,16 @@ class Window(QMainWindow):
             lambda: self.send('parallel', value=self.parallel_box.currentData()))
         parallel_row.addWidget(self.parallel_box)
         dest_layout.addLayout(parallel_row)
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(label('Speed limit', 'muted'))
+        self.speed_box = QComboBox()
+        for limit in SPEED_LIMITS:
+            self.speed_box.addItem('Unlimited' if not limit else f'{limit:g} MB/s', limit)
+        self.speed_box.setToolTip('Total download speed across all files. Changes apply while downloading.')
+        self.speed_box.currentIndexChanged.connect(
+            lambda: self.send('speed_limit', value=self.speed_box.currentData()))
+        speed_row.addWidget(self.speed_box)
+        dest_layout.addLayout(speed_row)
         sidebar.addWidget(dest_card)
         sidebar.addStretch()
         body.addWidget(sidebar_widget)
@@ -579,6 +589,9 @@ class Window(QMainWindow):
             if not value:
                 self.log('Welcome. Open API settings to connect your Telegram account.')
         elif name == 'settings':
+            self.speed_box.blockSignals(True)
+            self.speed_box.setCurrentIndex(self.speed_box.findData(speed_limit(value.get('speed_limit'))))
+            self.speed_box.blockSignals(False)
             self.parallel_box.blockSignals(True)
             self.parallel_box.setCurrentIndex(parallel_downloads(value.get('parallel_downloads')) - 1)
             self.parallel_box.blockSignals(False)
