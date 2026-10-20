@@ -308,6 +308,8 @@ class Window(QMainWindow):
         self.configured = False
         self.selected = None
         self.state = 'idle'
+        self.operation_state = 'idle'
+        self.finish_requested = False
         self.folder = ''
         self.current_job = None
         self.transfers_info = None
@@ -513,7 +515,10 @@ class Window(QMainWindow):
         self.start_btn = button('▶  Start', lambda: self.send('start'), True)
         self.pause_btn = button('Ⅱ  Pause', self.pause_resume)
         self.stop_btn = button('■  Stop', lambda: self.send('stop'))
-        for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.stop_btn):
+        self.finish_btn = button('Finish current', lambda: self.send('finish_current'))
+        self.finish_btn.setToolTip('Finish active downloads and pending archive checks, then stop. No new downloads will start. Resume if paused.')
+        self.stop_btn.setToolTip('Stop immediately and keep partial files for the next Start.')
+        for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.finish_btn, self.stop_btn):
             controls.addWidget(btn)
         controls.addStretch()
         controls.addWidget(self.file_status)
@@ -653,6 +658,9 @@ class Window(QMainWindow):
         self.verify_btn.setEnabled(ready and idle)
         self.pause_btn.setText('▶  Resume' if self.state == 'paused' else 'Ⅱ  Pause')
         self.stop_btn.setEnabled(not idle)
+        self.finish_btn.setEnabled(self.operation_state == 'downloading'
+                                   and self.state in {'downloading', 'paused'}
+                                   and not self.finish_requested)
         self.connect_btn.setEnabled(idle and not self.account)
         self.connect_btn.setVisible(not self.account)
         self.settings_btn.setEnabled(idle)
@@ -822,6 +830,10 @@ class Window(QMainWindow):
         if name == 'state':
             previous_state = self.state
             self.state = value
+            if value != 'paused':
+                self.operation_state = value
+            if value == 'idle':
+                self.finish_requested = False
             titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'renaming': 'Restoring filenames…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             if not (previous_state == 'updating' and value == 'idle'):
@@ -838,6 +850,8 @@ class Window(QMainWindow):
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'finish_current':
+            self.finish_requested = bool(value)
         elif name == 'transfers':
             if 'files' in value:
                 self.active_files = {row['message']: dict(row) for row in value['files']}
@@ -1043,6 +1057,11 @@ class Window(QMainWindow):
             self.render_archive()
         if name in {'transfers', 'state'}:
             self.render_active_transfers()
+        if self.finish_requested and self.state in {'downloading', 'paused', 'verifying'}:
+            status = {'downloading': 'Finishing current…', 'paused': 'Finish pending · paused',
+                      'verifying': 'Finishing checks…'}[self.state]
+            self.file_status.setText(status)
+            self.footer.setText(status + ' · No new downloads will start')
         self.update_controls()
 
     def tick(self):

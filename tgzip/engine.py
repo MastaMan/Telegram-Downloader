@@ -81,6 +81,7 @@ class Engine:
         self.dialogs = {}
         self.task = None
         self.kind = None
+        self.finish_requested = False
         self.gate = asyncio.Event()
         self.gate.set()
         self.password_future = None
@@ -123,6 +124,7 @@ class Engine:
         if self.task and not self.task.done():
             self.emit('error', 'Another operation is still running. Stop it first.')
             return
+        self.finish_requested = False
         async def run():
             self.kind = kind
             self.emit('state', kind)
@@ -133,6 +135,7 @@ class Engine:
             except Exception as exc:
                 self.emit('error', error_text(exc))
             finally:
+                self.finish_requested = False
                 self.kind = None
                 self.emit('state', 'idle')
                 self.snapshot()
@@ -145,6 +148,13 @@ class Engine:
         if command == 'password':
             if self.password_future and not self.password_future.done():
                 self.password_future.set_result(args['value'])
+            return
+        if command == 'finish_current':
+            if self.kind == 'downloading' and not self.finish_requested:
+                # No await: workers cannot claim another archive after this flag.
+                self.finish_requested = True
+                self.emit('finish_current', True)
+                self.emit('log', 'Finishing current downloads and pending archive checks. No new downloads will start. Resume if paused.')
             return
         if command == 'pause':
             if self.kind in {'downloading', 'scanning', 'verifying', 'renaming'}:
@@ -515,7 +525,10 @@ class Engine:
             tasks.create_task(produce(), name='Archive downloads')
             if executable:
                 tasks.create_task(self.verify_pending(wake, finished), name='Archive checks')
-        self.emit('log', 'Queue pass complete. Failed downloads can be retried with Start; failed checks with Check archives.')
+        if self.finish_requested:
+            self.emit('log', 'Current downloads and pending checks finished. Start continues the remaining queue.')
+        else:
+            self.emit('log', 'Queue pass complete. Failed downloads can be retried with Start; failed checks with Check archives.')
 
     async def verify_pending(self, wake, finished):
         account, chat = self.account, self.chat
@@ -552,7 +565,11 @@ class Engine:
         async def worker():
             nonlocal after
             while True:
+                if self.finish_requested:
+                    return
                 await self.gate.wait()
+                if self.finish_requested:
+                    return
                 # Claim without yielding: all workers and SQLite share this event loop.
                 # The cursor advances even on failure, so retries wait for the next Start.
                 job = self.store.next_job(account, chat, after)

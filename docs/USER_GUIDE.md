@@ -165,9 +165,11 @@ A missing, changed, locked, or unreadable file is not deliberately overwritten. 
 
 WinRAR's test checks archive integrity; **Verified** does not mean antivirus-scanned or safe to execute. The app never extracts archive contents.
 
-## 8. Pause, resume, stop, and close
+## 8. Pause, resume, finish current, stop, and close
 
 **Pause** suspends all active downloads and the background check queue (or the active scan/manual check). A running WinRAR test may finish, but its result is held and no quarantine move occurs until Resume. A request already in progress may finish, but its data is held until you resume. No new file chunks are requested while the transfer is waiting at the pause gate. **Resume** continues the same operation.
+
+**Finish current** stops assigning new archives to download slots. Files already in progress keep downloading, including their normal retries and Telegram rate-limit waits. The app also finishes pending archive checks, including checks left from an earlier session, then returns to Ready. Remaining downloads stay in the saved queue; **Start** continues them. If requested while paused, this stays paused until you click **Resume**. The status shows **Finishing current…**, **Finish pending · paused**, or **Finishing checks…**. You can still Pause or Stop; closing the window performs the immediate cleanup described below. This setting applies only to the current download operation and does not carry into the next Start.
 
 **Stop** cancels the active operation, including a pending network read, rate-limit wait, or this app's WinRAR process. An interrupted check and any waiting checks remain Unchecked; Start resumes them, or use Check archives. It keeps finished archives, partial files, and the scan checkpoint. Use Start to resume queued downloads; use Scan archives to continue scanning.
 

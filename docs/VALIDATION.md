@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Finish current downloads — 20 October 2026
+
+The candidate ran **186 tests per runtime** on macOS with portable PowerShell enabled. Python **3.14.8** passed **185**, with Windows DPAPI skipped; Python **3.15.0** passed **184**, with Windows DPAPI and unavailable cryptg skipped. Both suites exited successfully. The Python 3.14 interpreter probe and syntax checks also passed.
+
+A seven-file simulated queue proves that Finish current lets the three claimed files finish, waits for their archive checks, leaves four files untouched, and allows the next Start to finish the remaining queue. Repeating the command is harmless. A paused transfer fixture verifies that the command does not resume work, Resume finishes the two active files, and workers do not claim replacements. The existing real-file partial-transfer test now requests Finish current while paused before immediate Stop: all streams close, saved partials survive reopening SQLite, and downloads resume at their offsets.
+
+Offscreen Qt tests verify the button command, disabled state after requesting it, download/pause/check status transitions, reset on idle, and its unavailability during a paused scan. The interface was visually inspected at 1220×850 and 1000×680, including the finishing state and a paused operation with Activity expanded. The documentation preview was refreshed.
+
+These are local/offscreen tests with simulated Telegram streams and archive checks. Real Windows, live Telegram, and WinRAR were unavailable. On Windows, check Finish current during several parallel downloads, while paused, and while checks are pending; verify that Start continues the saved remainder and immediate Stop/close still preserve partial files.
+
 ## Active progress row and paginated queue filters — 20 October 2026
 
 The final candidate ran **183 tests per runtime** on macOS with portable PowerShell enabled. Python **3.14.8** passed **182**, with Windows DPAPI skipped; Python **3.15.0** passed **181**, with Windows DPAPI and unavailable cryptg skipped. Both processes exited successfully. The interpreter probe and Python syntax checks also passed.

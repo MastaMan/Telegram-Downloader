@@ -70,7 +70,7 @@ class UITests(unittest.TestCase):
             window.activity_toggle.click()
             self.app.processEvents()
             for widget in (window.table, window.archive_bar, window.file_bar, window.chat_box,
-                           window.speed_box, window.verify_btn, window.stop_btn):
+                           window.speed_box, window.verify_btn, window.finish_btn, window.stop_btn):
                 position = widget.mapTo(window, widget.rect().topLeft())
                 self.assertGreaterEqual(position.x(), 0)
                 self.assertGreaterEqual(position.y(), 0)
@@ -98,6 +98,38 @@ class UITests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(screenshot.exists())
             self.assertGreater(screenshot.stat().st_size, 1000)
+
+    def test_finish_current_control_and_status_follow_operation_lifecycle(self):
+        window = Window(demo=True)
+        window.resize(1000, 680)
+        window.show()
+        self.app.processEvents()
+        self.assertTrue(window.finish_btn.isEnabled())
+        with patch.object(window, 'send') as send:
+            window.finish_btn.click()
+            send.assert_called_once_with('finish_current')
+        window.on_event('finish_current', True)
+        self.assertFalse(window.finish_btn.isEnabled())
+        self.assertTrue(window.stop_btn.isEnabled())
+        self.assertIn('Finishing current', window.file_status.text())
+        window.on_event('state', 'paused')
+        self.assertIn('paused', window.file_status.text())
+        self.assertTrue(window.pause_btn.isEnabled())
+        self.assertTrue(window.stop_btn.isEnabled())
+        window.on_event('state', 'downloading')
+        self.assertIn('Finishing current', window.file_status.text())
+        window.on_event('state', 'verifying')
+        self.assertIn('Finishing checks', window.file_status.text())
+        window.on_event('state', 'idle')
+        self.assertFalse(window.finish_requested)
+        self.assertFalse(window.finish_btn.isEnabled())
+        window.on_event('state', 'scanning')
+        window.on_event('state', 'paused')
+        self.assertFalse(window.finish_btn.isEnabled())
+        window.on_event('state', 'downloading')
+        window.on_event('state', 'paused')
+        self.assertTrue(window.finish_btn.isEnabled())
+        window.close()
 
     def test_active_strip_fits_twenty_files_and_preserves_each_progress_on_pause(self):
         window = Window(demo=True)

@@ -379,6 +379,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(3):
                 await asyncio.wait_for(blocked.get(), 2)
             await self.engine.command('pause')
+            await self.engine.command('finish_current')
+            self.assertTrue(self.engine.finish_requested)
             release.set()
             # Let all in-flight chunks reach the shared pause gate.
             for _ in range(10):
@@ -387,6 +389,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((self.root / f'{number}.zip.part').stat().st_size, CHUNK)
                 self.assertFalse((self.root / f'{number}.zip').exists())
             await asyncio.wait_for(self.engine.command('stop'), 2)
+            self.assertFalse(self.engine.finish_requested)
             self.assertEqual(sorted(closed), [1, 2, 3])
             self.assertTrue(all(job['state'] == 'queued' and job['done'] == CHUNK
                                 for job in self.engine.store.jobs(123, -100)))
@@ -398,6 +401,86 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.engine.store.summary(123, -100)['complete'], 3)
         for number in range(1, 4):
             self.assertEqual((self.root / f'{number}.zip').stat().st_size, CHUNK * 2)
+
+    async def test_finish_current_drains_claimed_files_and_checks_then_start_continues(self):
+        self.queue_files(7)
+        self.engine.settings['parallel_downloads'] = 3
+        started = asyncio.Queue()
+        release, check_release, checking = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        visited, checked = [], []
+
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
+            visited.append(job['message'])
+            started.put_nowait(job['message'])
+            await release.wait()
+            progress(100, 0)
+
+        async def verify(job, *, background):
+            self.assertTrue(background)
+            checking.set()
+            await check_release.wait()
+            checked.append(job['message'])
+            self.engine.store.update(123, -100, job['message'], verification='verified')
+
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), \
+             patch.object(self.engine, 'verify_job', side_effect=verify), \
+             patch('tgzip.engine.download', transfer):
+            await self.engine.command('start')
+            for _ in range(3):
+                await asyncio.wait_for(started.get(), 2)
+            await self.engine.command('finish_current')
+            await self.engine.command('finish_current')
+            self.assertEqual(self.events.count(('finish_current', True)), 1)
+            release.set()
+            await asyncio.wait_for(checking.wait(), 2)
+            self.assertFalse(self.engine.task.done())
+            self.assertEqual(visited, [1, 2, 3])
+            check_release.set()
+            await asyncio.wait_for(self.engine.task, 2)
+            self.assertEqual(checked, [1, 2, 3])
+            self.assertIsNone(self.engine.kind)
+            self.assertFalse(self.engine.finish_requested)
+            jobs = self.engine.store.jobs(123, -100)
+            self.assertEqual([j['state'] for j in jobs], ['done'] * 3 + ['queued'] * 4)
+            self.assertTrue(all(j['done'] == 0 for j in jobs[3:]))
+            await self.engine.command('start')
+            await asyncio.wait_for(self.engine.task, 2)
+        self.assertEqual(visited, list(range(1, 8)))
+        self.assertEqual(checked, list(range(1, 8)))
+        self.assertEqual(self.engine.store.summary(123, -100)['complete'], 7)
+
+    async def test_finish_current_while_paused_waits_for_resume_without_refilling(self):
+        self.queue_files(5)
+        self.engine.settings['parallel_downloads'] = 2
+        started = asyncio.Queue()
+        release = asyncio.Event()
+        visited = []
+
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
+            visited.append(job['message'])
+            started.put_nowait(job['message'])
+            await release.wait()
+            await gate.wait()
+            progress(100, 0)
+
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            await self.engine.command('start')
+            for _ in range(2):
+                await asyncio.wait_for(started.get(), 2)
+            await self.engine.command('pause')
+            await self.engine.command('finish_current')
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            self.assertFalse(self.engine.gate.is_set())
+            self.assertFalse(self.engine.task.done())
+            self.assertEqual(self.engine.store.summary(123, -100)['complete'], 0)
+            await self.engine.command('resume')
+            await asyncio.wait_for(self.engine.task, 2)
+        self.assertEqual(visited, [1, 2])
+        self.assertEqual(self.engine.store.summary(123, -100)['complete'], 2)
+        await self.engine.command('finish_current')
+        self.assertFalse(self.engine.finish_requested)
 
     async def test_progress_burst_avoids_sql_writes_and_periodically_checkpoints(self):
         self.queue_files(1, 1000)
