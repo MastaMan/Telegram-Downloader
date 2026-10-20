@@ -132,6 +132,9 @@ class Store:
         CREATE TABLE IF NOT EXISTS scans (
           account INTEGER, chat INTEGER, cursor INTEGER DEFAULT 0,
           PRIMARY KEY(account, chat));
+        CREATE TABLE IF NOT EXISTS filename_moves (
+          account INTEGER, chat INTEGER, message INTEGER, plan TEXT NOT NULL,
+          PRIMARY KEY(account, chat, message));
         ''')
         with self.db:
             columns = {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}
@@ -202,8 +205,37 @@ class Store:
         self.progress_pending.pop(key, None)
 
     def filename_allocator(self):
-        return FilenameAllocator(path for row in self.db.execute('SELECT path,partial_path FROM jobs')
-                                 for path in row)
+        paths = [path for row in self.db.execute('SELECT path,partial_path,quarantine_path FROM jobs')
+                 for path in row]
+        paths.extend(json.loads(row[0])['destination'] for row in self.db.execute('SELECT plan FROM filename_moves'))
+        return FilenameAllocator(paths)
+
+    def legacy_name_jobs(self, account, chat):
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM jobs WHERE account=? AND chat=? AND state='done' AND naming_version=0 ORDER BY message",
+            (account, chat))]
+
+    def filename_moves(self, account, chat):
+        return [(row['message'], json.loads(row['plan'])) for row in self.db.execute(
+            'SELECT message,plan FROM filename_moves WHERE account=? AND chat=? ORDER BY message', (account, chat))]
+
+    def plan_filename_move(self, account, chat, message, plan):
+        with self.db:
+            self.db.execute('INSERT INTO filename_moves VALUES (?,?,?,?)',
+                            (account, chat, message, json.dumps(plan)))
+
+    def finish_filename_move(self, account, chat, message, plan):
+        column = 'quarantine_path' if plan['quarantined'] else 'path'
+        with self.db:
+            self.db.execute(f'UPDATE jobs SET {column}=?,name=?,naming_version=2 WHERE account=? AND chat=? AND message=?',
+                            (plan['destination'], plan['name'], account, chat, message))
+            self.db.execute('DELETE FROM filename_moves WHERE account=? AND chat=? AND message=?',
+                            (account, chat, message))
+
+    def cancel_filename_move(self, account, chat, message):
+        with self.db:
+            self.db.execute('DELETE FROM filename_moves WHERE account=? AND chat=? AND message=?',
+                            (account, chat, message))
 
     def jobs(self, account, chat, pending=False, limit=None):
         query = "SELECT * FROM jobs WHERE account=? AND chat=?"

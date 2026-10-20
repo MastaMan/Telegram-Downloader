@@ -472,7 +472,7 @@ class Window(QMainWindow):
         ready = bool(self.account and self.selected)
         self.scan_btn.setEnabled(ready and idle and bool(self.folder))
         self.start_btn.setEnabled(ready and idle)
-        self.pause_btn.setEnabled(self.state in {'downloading', 'scanning', 'verifying', 'paused'})
+        self.pause_btn.setEnabled(self.state in {'downloading', 'scanning', 'verifying', 'renaming', 'paused'})
         self.checker_btn.setEnabled(idle)
         self.verify_btn.setEnabled(ready and idle)
         self.pause_btn.setText('▶  Resume' if self.state == 'paused' else 'Ⅱ  Pause')
@@ -523,7 +523,7 @@ class Window(QMainWindow):
         if name == 'state':
             previous_state = self.state
             self.state = value
-            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
+            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'renaming': 'Restoring filenames…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             if not (previous_state == 'updating' and value == 'idle'):
                 self.footer.setText(titles.get(value, value))
@@ -560,6 +560,20 @@ class Window(QMainWindow):
             self.file_status.setText('Checking archive…')
             self.footer.setText(value)
             self.on_event('speed_reset', None)
+        elif name == 'rename_progress':
+            self.file_name.setText('Restoring archive names')
+            self.file_status.setText('Restoring filenames…')
+            percent = value['done'] / max(1, value['total'])
+            self.file_bar.setValue(round(1000 * percent))
+            self.percent_label.setText(f'{percent:.0%}')
+            self.byte_label.setText(f"{value['done']} of {value['total']} archives processed")
+            self.footer.setText(f"Restoring filenames: {value['done']} / {value['total']}")
+            self.on_event('speed_reset', None)
+        elif name == 'rename_result':
+            self.file_name.setText('Filename restoration finished')
+            self.byte_label.setText(f"{value['restored']} restored · {value['skipped']} skipped")
+            self.file_bar.setValue(1000)
+            self.percent_label.setText('100%')
         elif name == 'configured':
             self.configured = value
             if not value:

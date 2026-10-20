@@ -73,6 +73,26 @@ class UITests(unittest.TestCase):
         self.assertFalse(window.stop_btn.isEnabled())
         window.close()
 
+    def test_filename_restoration_has_clear_status_and_pause_stop_controls(self):
+        window = Window(demo=True)
+        window.on_event('state', 'renaming')
+        self.assertEqual(window.file_status.text(), 'Restoring filenames…')
+        self.assertTrue(window.pause_btn.isEnabled())
+        self.assertTrue(window.stop_btn.isEnabled())
+        self.assertFalse(window.start_btn.isEnabled())
+        self.assertTrue(window.chat_box.isEnabled())
+        window.on_event('rename_progress', {'done': 12, 'total': 20})
+        self.assertEqual(window.file_bar.value(), 600)
+        self.assertEqual(window.percent_label.text(), '60%')
+        self.assertEqual(window.byte_label.text(), '12 of 20 archives processed')
+        self.assertEqual(window.footer.text(), 'Restoring filenames: 12 / 20')
+        self.assertEqual(window.file_status.text(), 'Restoring filenames…')
+        window.on_event('rename_result', {'restored': 18, 'skipped': 2})
+        self.assertEqual(window.file_name.text(), 'Filename restoration finished')
+        self.assertEqual(window.byte_label.text(), '18 restored · 2 skipped')
+        self.assertEqual(window.file_bar.value(), 1000)
+        window.close()
+
     def test_verification_states_are_distinct_from_download_progress(self):
         window = Window(demo=True)
         self.assertEqual(window.table.item(0, 3).text(), 'Verified')

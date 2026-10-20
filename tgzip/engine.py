@@ -13,6 +13,7 @@ from .security import Vault, validate_keys, import_legacy_session
 from .storage import parallel_downloads, Store, atomic_write, load_settings, safe_name, archive_extension
 from .transfer import download, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
+from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
 from updater import UpdateError, prepare_update, load_plan
 
 
@@ -134,7 +135,7 @@ class Engine:
                 self.password_future.set_result(args['value'])
             return
         if command == 'pause':
-            if self.kind in {'downloading', 'scanning', 'verifying'}:
+            if self.kind in {'downloading', 'scanning', 'verifying', 'renaming'}:
                 self.gate.clear()
                 self.store.flush_progress()
                 self.emit('state', 'paused')
@@ -182,6 +183,8 @@ class Engine:
                 self.emit('selected', chat)
                 self.emit('current', None)
                 self.snapshot()
+                if self.store.legacy_name_jobs(self.account, chat) or self.store.filename_moves(self.account, chat):
+                    self.launch('renaming', self.restore_filenames)
             elif command == 'folder':
                 self.settings['download_dir'] = str(Path(args['path']).resolve())
                 self.save_settings()
@@ -316,6 +319,7 @@ class Engine:
             me = await self.client.get_me()
             self.account = me.id
             self.emit('account', {'name': ' '.join(filter(None, [me.first_name, me.last_name])), 'id': me.id})
+            self.emit('qr', None)
             await self.refresh()
         finally:
             self.emit('qr', None)
@@ -337,8 +341,93 @@ class Engine:
         self.emit('selected', self.chat)
         self.emit('current', None)
         self.snapshot()
+        if self.chat:
+            await self.restore_filenames()
+
+    async def restore_filenames(self):
+        account, chat = self.account, self.chat
+        if not account or not chat:
+            return
+        plans = self.store.filename_moves(account, chat)
+        jobs = [job for job in self.store.legacy_name_jobs(account, chat) if legacy_source(job) is not None]
+        if not jobs and not plans:
+            return
+        previous_kind = self.kind
+        self.kind = 'renaming'
+        self.emit('current', None)
+        self.emit('state', 'renaming')
+        restored, skipped = 0, 0
+        try:
+            for message_id, plan in plans:
+                await self.gate.wait()
+                restore_move(self.store, account, chat, message_id, plan)
+                restored += 1
+            # Recovery may have completed rows fetched above.
+            jobs = self.store.legacy_name_jobs(account, chat)
+            candidates = []
+            for index, job in enumerate(jobs):
+                if index % 100 == 0:
+                    await self.gate.wait()
+                    await asyncio.sleep(0)
+                source = legacy_source(job)
+                if source is None:
+                    continue
+                try:
+                    identity = fingerprint(source)
+                    if identity[2] != job['size']:
+                        raise TransferError('Local file size changed.')
+                    candidates.append((job, source, identity))
+                except (OSError, TransferError):
+                    skipped += 1
+            filenames = self.store.filename_allocator()
+            self.emit('rename_progress', {'done': 0, 'total': len(candidates)})
+            for offset in range(0, len(candidates), 100):
+                batch = candidates[offset:offset + 100]
+                while True:
+                    await self.gate.wait()
+                    try:
+                        messages = await self.client.get_messages(
+                            self.dialogs[chat].input_entity, ids=[job['message'] for job, _, _ in batch])
+                        break
+                    except errors.FloodWaitError as exc:
+                        self.emit('log', f'Filename restoration: Telegram requested a {exc.seconds}-second wait.')
+                        await asyncio.sleep(exc.seconds)
+                messages = {message.id: message for message in messages if message is not None}
+                for index, (job, source, identity) in enumerate(batch, 1):
+                    await self.gate.wait()
+                    message = messages.get(job['message'])
+                    doc = getattr(message, 'document', None)
+                    original = getattr(getattr(message, 'file', None), 'name', None)
+                    if (not doc or str(doc.id) != job['document'] or doc.size != job['size']
+                            or not archive_extension(original, doc.mime_type)):
+                        skipped += 1
+                        self.emit('rename_progress', {'done': offset + index, 'total': len(candidates)})
+                        continue
+                    name = safe_name(original or f"archive_{job['message']}{archive_extension(None, doc.mime_type)}")
+                    destination = filenames.allocate(source.parent, name)
+                    try:
+                        rename_completed(self.store, job, source, destination, name, identity)
+                    except (OSError, TransferError) as exc:
+                        self.emit('log', f"File #{job['message']}: filename restoration failed. {error_text(exc)}")
+                        # A journaled move must be reconciled before any check
+                        # can operate on this chat's saved paths.
+                        if self.store.filename_moves(account, chat):
+                            raise
+                        skipped += 1
+                    else:
+                        restored += 1
+                    self.emit('rename_progress', {'done': offset + index, 'total': len(candidates)})
+                    await asyncio.sleep(0)
+                self.snapshot()
+            self.emit('log', f'Filename restoration: {restored} restored, {skipped} skipped (missing, changed, or unavailable).')
+            self.emit('rename_result', {'restored': restored, 'skipped': skipped})
+        finally:
+            self.kind = previous_kind
+            self.emit('state', previous_kind or 'idle')
+            self.snapshot()
 
     async def scan(self):
+        await self.restore_filenames()
         account, chat = self.account, self.chat
         folder = self.settings.get('download_dir')
         if not folder:
@@ -368,6 +457,7 @@ class Engine:
         self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
 
     async def download_queue(self):
+        await self.restore_filenames()
         if aes.cryptg is not None:
             self.emit('log', 'Download encryption: cryptg acceleration enabled.')
         elif aes.libssl.decrypt_ige and aes.libssl.encrypt_ige:
@@ -574,6 +664,7 @@ class Engine:
         return False
 
     async def verify_queue(self):
+        await self.restore_filenames()
         executable = self.checker()
         self.emit('checker', executable)
         if not executable:

@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Automatically restore completed legacy filenames — 20 October 2026
+
+The full suite ran **157 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 156 with Windows DPAPI skipped; Python **3.15.0** passed 155 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled. The new restoration view was rendered with real Qt offscreen and visually inspected: archive count, percentage, progress bar, Pause, and Stop are visible and consistent.
+
+Real temporary-file tests cover original names beyond the old truncation limit, quarantine paths, disk/queue collisions, 105 archives fetched in two metadata batches, unchanged completion/check status, and passing restored paths to the archive checker without downloading again. Missing, changed, untracked, newly named, symbolic-link, deleted-message, and edited-document cases are preserved. A file replaced with same-size content and identical mtime while metadata is fetched is rejected by its changed filesystem identity.
+
+Interruption tests reopen SQLite before the move, after the move but before the final metadata commit, and between POSIX hard-link creation and source removal. A database trigger verifies that updating the queue and removing the rename journal roll back together. Recovery rejects an unrelated same-size destination and keeps both files. Locked sources can be skipped and retried. Async tests cover automatic saved-chat refresh/selection, pause during metadata retrieval, and cancellation with later retry.
+
+No real Windows filesystem, Telegram account, or WinRAR executable was used for this feature. Windows acceptance: update with an existing completed queue, log in to the same account, and confirm the remembered chat restores names automatically. Include a previously shortened name and a file in wrong_archives; confirm completion/check status stays intact. Test duplicates, locked files, Pause/Stop, close/reopen, and Check archives after restoration. Other chats are handled when selected. Untracked files and attachments that can no longer be verified against Telegram are intentionally left unchanged.
+
 ## Preserve original archive filenames — 20 October 2026
 
 The full suite ran **137 tests per runtime** on macOS: Python **3.12.3** and **3.14.8** passed 136 with Windows DPAPI skipped; Python **3.15.0** passed 135 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell launcher tests were enabled. All three processes exited successfully.
