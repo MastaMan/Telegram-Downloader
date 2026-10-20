@@ -27,6 +27,7 @@ Intermediate download progress is batched into one database transaction about on
 ## What is included
 
 - Compact dark interface with a larger queue, current-file and overall progress, speed, time remaining, and a collapsible Activity log.
+- A separate **File** progress bar shows one archive's name, downloaded bytes, and percentage. Select a queue row to inspect it, or keep **Follow active** enabled to follow downloads automatically.
 - **Speed limit** dropdown: Unlimited by default, or 10 / 5 / 2 / 1 / 0.5 / 0.25 MB/s shared across all downloads. Change it live; the choice is remembered.
 - **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.

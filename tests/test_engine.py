@@ -458,6 +458,18 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(limiter is self.engine.limiter for limiter in seen))
         self.assertEqual(self.engine.limiter.rate, 2 * 1024 * 1024)
 
+    async def test_transfer_snapshot_includes_independent_file_details(self):
+        self.queue_files(1)
+        self.engine.transfers[1] = {'name': '1.zip', 'path': str(self.root / '1.zip'),
+                                   'done': 25, 'size': 100, 'speed': 0, 'updated': 0}
+        self.engine.emit_transfers()
+        snapshot = next(value for event, value in reversed(self.events) if event == 'transfers')
+        self.engine.transfers[1]['done'] = 99
+        self.assertEqual(snapshot['files'][0]['done'], 25)
+        self.assertEqual(snapshot['files'][0]['message'], 1)
+        self.assertEqual(snapshot['files'][0]['name'], '1.zip')
+        self.assertEqual(snapshot['files'][0]['size'], 100)
+
     async def test_qr_expiry_two_factor_retry_and_password_not_saved(self):
         engine = self.engine
         passwords = iter(['incorrect fixture', 'correct fixture'])

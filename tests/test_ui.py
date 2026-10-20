@@ -44,6 +44,9 @@ class UITests(unittest.TestCase):
         self.assertGreaterEqual(window.table.viewport().height() // 32, 9)
         self.assertEqual(window.file_bar.value(), window.overall_bar.value())
         self.assertEqual(window.file_name.text(), '4 active downloads')
+        self.assertEqual(window.archive_bar.value(), 620)
+        self.assertEqual(window.archive_name.text(), 'Environment assets — autumn.rar')
+        self.assertNotEqual(window.archive_bar.value(), window.overall_bar.value())
         self.assertIn('18.6', window.speed_value.text())
         self.assertTrue(window.chat_box.isEnabled())
         self.assertFalse(window.start_btn.isEnabled())
@@ -175,6 +178,77 @@ class UITests(unittest.TestCase):
         self.assertTrue(window.parallel_box.isEnabled())
         window.on_event('settings', {'parallel_downloads': 5})
         self.assertEqual(window.parallel_box.currentData(), 5)
+        window.close()
+
+    def test_individual_bar_stays_on_one_active_file_then_follows_next(self):
+        window = Window(demo=True)
+        window.on_event('progress', {'message': 4, 'done': 70, 'size': 100, 'speed': 10})
+        self.assertEqual(window.watched_job['message'], 3)
+        self.assertEqual(window.archive_bar.value(), 620)
+        window.on_event('progress', {'message': 3, 'done': 100, 'size': 100, 'speed': 10})
+        self.assertEqual(window.archive_bar.value(), 1000)
+        window.on_event('transfers', dict(window.transfers_info,
+                                         files=[row for mid, row in window.active_files.items() if mid != 3],
+                                         active=3))
+        self.assertEqual(window.watched_job['message'], 4)
+        self.assertEqual(window.archive_bar.value(), 700)
+        window.close()
+
+    def test_row_selection_pins_progress_without_changing_overall_bar(self):
+        window = Window(demo=True)
+        overall = window.file_bar.value()
+        window.table.setCurrentCell(3, 0)
+        self.assertFalse(window.archive_follow.isChecked())
+        self.assertEqual(window.watched_job['message'], 4)
+        self.assertEqual(window.archive_bar.value(), 400)
+        window.on_event('progress', {'message': 3, 'done': 95, 'size': 100, 'speed': 10})
+        self.assertEqual(window.archive_bar.value(), 400)
+        window.on_event('progress', {'message': 4, 'done': 75, 'size': 100, 'speed': 10})
+        self.assertEqual(window.archive_bar.value(), 750)
+        self.assertIn('75%', window.archive_detail.text())
+        self.assertEqual(window.file_bar.value(), overall)
+        # A queue refresh may insert/reorder rows but must retain file identity.
+        rows = list(window.queue_jobs.values())
+        window.on_event('queue', {'rows': rows[::-1], 'summary': window.transfers_info['summary']})
+        self.assertEqual(window.watched_job['message'], 4)
+        self.assertFalse(window.archive_follow.isChecked())
+        self.assertEqual(window.table.currentRow(), 8)
+        window.on_event('state', 'paused')
+        self.assertEqual(window.archive_bar.value(), 750)
+        window.close()
+
+    def test_completed_selection_stays_visible_until_auto_follow_is_enabled(self):
+        window = Window(demo=True)
+        window.table.setCurrentCell(0, 0)
+        self.assertEqual(window.archive_bar.value(), 1000)
+        self.assertEqual(window.watched_job['message'], 1)
+        window.on_event('verification', {'name': 'another.zip', 'detail': 'Checking attempt 2/3'})
+        self.assertEqual(window.watched_job['message'], 1)
+        window.archive_follow.setChecked(True)
+        self.assertEqual(window.watched_job['message'], 3)
+        self.assertEqual(window.archive_bar.value(), 620)
+        # Clicking the still-highlighted row must pin it again after Auto-follow.
+        window.table.cellClicked.emit(0, 0)
+        self.assertEqual(window.watched_job['message'], 1)
+        self.assertFalse(window.archive_follow.isChecked())
+        window.close()
+
+    def test_active_file_outside_visible_queue_and_chat_reset(self):
+        window = Window(demo=True)
+        job = {'message': 2001, 'name': 'Later archive.RAR', 'path': 'C:/Later archive.RAR',
+               'done': 25, 'size': 100}
+        window.on_event('transfers', dict(window.transfers_info, active=1, files=[job]))
+        self.assertNotIn(2001, window.queue_rows)
+        self.assertEqual(window.archive_name.text(), 'Later archive.RAR')
+        self.assertEqual(window.archive_bar.value(), 250)
+        window.on_event('progress', {'message': 2001, 'done': 100, 'size': 100, 'speed': 0})
+        window.on_event('transfers', dict(window.transfers_info, active=0, files=[]))
+        self.assertEqual(window.archive_bar.value(), 1000)
+        window.on_event('selected', -100456)
+        self.assertIsNone(window.watched_job)
+        self.assertEqual(window.archive_bar.value(), 0)
+        self.assertEqual(window.archive_name.text(), 'No file selected')
+        self.assertTrue(window.archive_follow.isChecked())
         window.close()
 
     def test_qr_image_is_rendered_and_can_be_cancelled(self):

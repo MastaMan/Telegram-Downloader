@@ -4,7 +4,7 @@ from pathlib import Path
 import qrcode
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -33,6 +33,7 @@ QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-ra
 QLineEdit:focus, QComboBox:focus { border-color: #5996ff; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
 QComboBox::drop-down { width: 24px; border: none; }
+QCheckBox { background: transparent; }
 QProgressBar { background: #26334a; border: none; border-radius: 5px; min-height: 10px; max-height: 10px; }
 QProgressBar::chunk { background: #5c9aff; border-radius: 5px; }
 QProgressBar#overall::chunk { background: #48cbb5; }
@@ -205,6 +206,9 @@ class Window(QMainWindow):
         self.current_job = None
         self.transfers_info = None
         self.queue_rows = {}
+        self.queue_jobs = {}
+        self.active_files = {}
+        self.watched_job = None
         self.qr_dialog = None
         self.password_dialog = None
         self.closing = False
@@ -357,6 +361,24 @@ class Window(QMainWindow):
             column.addWidget(value)
             metrics.addLayout(column)
         current.addLayout(metrics)
+        archive_heading = QHBoxLayout()
+        archive_heading.addWidget(label('File', 'muted'))
+        self.archive_name = label('No file selected', 'muted')
+        self.archive_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        archive_heading.addWidget(self.archive_name, 1)
+        self.archive_detail = label('—', 'muted')
+        archive_heading.addWidget(self.archive_detail)
+        self.archive_follow = QCheckBox('Follow active')
+        self.archive_follow.setChecked(True)
+        self.archive_follow.setToolTip('Follow one active download automatically. Select a queue row to inspect a specific file.')
+        self.archive_follow.toggled.connect(lambda: self.render_archive())
+        archive_heading.addWidget(self.archive_follow)
+        current.addLayout(archive_heading)
+        self.archive_bar = QProgressBar()
+        self.archive_bar.setRange(0, 1000)
+        self.archive_bar.setValue(0)
+        self.archive_bar.setTextVisible(False)
+        current.addWidget(self.archive_bar)
         controls = QHBoxLayout()
         self.scan_btn = button('Scan archives', lambda: self.send('scan'))
         self.start_btn = button('▶  Start', lambda: self.send('start'), True)
@@ -398,11 +420,14 @@ class Window(QMainWindow):
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.currentCellChanged.connect(self.watch_queue_file)
+        self.table.cellClicked.connect(lambda row, col: self.watch_queue_file(row, col, -1, -1))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index, width in [(1, 92), (2, 102), (3, 126)]:
             self.table.setColumnWidth(index, width)
-        self.table.setMinimumHeight(240)
+        self.table.setMinimumHeight(200)
         queue.addWidget(self.table, 1)
         content.addWidget(queue_card, 1)
         activity_header = QHBoxLayout()
@@ -518,6 +543,46 @@ class Window(QMainWindow):
         self.eta_value.setText(eta_text((summary['bytes'] - summary['received']) / speed if speed else None))
         self.update_summary(summary)
 
+    def reset_archive(self):
+        self.queue_jobs = {}
+        self.active_files = {}
+        self.watched_job = None
+        self.table.blockSignals(True)
+        self.table.clearSelection()
+        self.table.setCurrentCell(-1, -1)
+        self.table.blockSignals(False)
+        self.archive_follow.setChecked(True)
+        self.render_archive()
+
+    def watch_queue_file(self, row, column, previous_row, previous_column):
+        item = self.table.item(row, 0) if row >= 0 else None
+        if item is None:
+            return
+        message = item.data(Qt.ItemDataRole.UserRole)
+        job = self.active_files.get(message) or self.queue_jobs.get(message)
+        if job is not None:
+            self.watched_job = dict(job)
+            self.archive_follow.setChecked(False)
+            self.render_archive()
+
+    def render_archive(self):
+        message = self.watched_job['message'] if self.watched_job else None
+        if self.archive_follow.isChecked() and self.active_files and message not in self.active_files:
+            message = next(iter(self.active_files))
+        job = self.active_files.get(message) or self.queue_jobs.get(message) or self.watched_job
+        if job is None:
+            self.archive_name.setText('No file selected')
+            self.archive_name.setToolTip('Select an archive in the queue to see its progress.')
+            self.archive_detail.setText('—')
+            self.archive_bar.setValue(0)
+            return
+        self.watched_job = dict(job)
+        percent = max(0, min(1, job['done'] / max(1, job['size'])))
+        self.archive_name.setText(job['name'])
+        self.archive_name.setToolTip(job['name'] + '\n' + (job.get('quarantine_path') or job['path']))
+        self.archive_detail.setText(f"{size_text(job['done'])} / {size_text(job['size'])} · {percent:.0%}")
+        self.archive_bar.setValue(round(percent * 1000))
+
     def update_verification_indicator(self):
         if self.verification_info:
             detail = self.verification_info['detail']
@@ -550,6 +615,8 @@ class Window(QMainWindow):
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
         elif name == 'transfers':
+            if 'files' in value:
+                self.active_files = {row['message']: dict(row) for row in value['files']}
             self.transfers_info = value
             self.current_job = None
             self.last_progress = time.monotonic()
@@ -599,6 +666,8 @@ class Window(QMainWindow):
             self.folder_label.setText(Path(self.folder).name if self.folder else 'Choose a download folder')
             self.folder_label.setToolTip(self.folder)
         elif name == 'account':
+            if (self.account or {}).get('id') != (value or {}).get('id'):
+                self.reset_archive()
             self.account = value
             self.account_name.setText(value['name'] if value else 'Connect Telegram')
             self.account_detail.setText(f'ID: {value["id"]}' if value else 'Sign in securely with a QR code.')
@@ -613,6 +682,8 @@ class Window(QMainWindow):
             self.chat_box.setCurrentIndex(-1)
             self.chat_box.blockSignals(False)
         elif name == 'selected':
+            if self.selected != value:
+                self.reset_archive()
             self.selected = value
             self.chat_box.blockSignals(True)
             self.chat_box.setCurrentIndex(self.chat_box.findData(value) if value is not None else -1)
@@ -633,6 +704,9 @@ class Window(QMainWindow):
                 self.byte_label.setText('Choose a chat → Scan archives → Start')
                 self.on_event('speed_reset', None)
         elif name == 'progress':
+            for job in (self.active_files.get(value['message']), self.queue_jobs.get(value['message']), self.watched_job):
+                if job is not None and job['message'] == value['message']:
+                    job.update(done=value['done'], size=value['size'])
             self.last_progress = time.monotonic()
             percent = value['done'] / max(1, value['size'])
             if self.transfers_info is None:
@@ -649,9 +723,13 @@ class Window(QMainWindow):
             if 'summary' in value:
                 self.update_summary(value['summary'])
         elif name == 'queue':
+            selected_item = self.table.item(self.table.currentRow(), 0) if self.table.currentRow() >= 0 else None
+            selected_message = selected_item.data(Qt.ItemDataRole.UserRole) if selected_item else None
+            self.table.blockSignals(True)
             scroll = self.table.verticalScrollBar().value()
             self.table.setRowCount(len(value['rows']))
             self.queue_rows = {}
+            self.queue_jobs = {row['message']: dict(row) for row in value['rows']}
             for index, row in enumerate(value['rows']):
                 self.queue_rows[row['message']] = index
                 status = {'queued': 'Queued', 'downloading': 'Downloading', 'done': 'Completed', 'error': 'Failed'}.get(row['state'], row['state'])
@@ -664,12 +742,19 @@ class Window(QMainWindow):
                 texts = [row['name'], size_text(row['size']), f'{row["done"] / max(row["size"], 1):.0%}', status]
                 for col, text in enumerate(texts):
                     item = QTableWidgetItem(text)
+                    if col == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, row['message'])
                     item.setToolTip('\n'.join(filter(None, [row['error'], row.get('verification_error'), row.get('quarantine_path') or row['path']])))
                     self.table.setItem(index, col, item)
                 self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff'}.get(row['state'], '#a6b6cc')))
                 if row['state'] == 'done' and verification != 'ok':
                     self.table.item(index, 3).setForeground(QColor('#ff9a9d' if verification in {'error', 'quarantined'} else '#e8c77f'))
             self.table.verticalScrollBar().setValue(scroll)
+            if selected_message in self.queue_rows:
+                self.table.setCurrentCell(self.queue_rows[selected_message], 0)
+            else:
+                self.table.setCurrentCell(-1, -1)
+            self.table.blockSignals(False)
             self.update_summary(value['summary'])
             if self.current_job and self.state == 'idle':
                 index = self.queue_rows.get(self.current_job['message'])
@@ -713,6 +798,8 @@ class Window(QMainWindow):
         elif name == 'closed':
             self.can_close = True
             self.close()
+        if name in {'transfers', 'progress', 'queue', 'state', 'selected', 'account'}:
+            self.render_archive()
         self.update_controls()
 
     def tick(self):
@@ -760,7 +847,8 @@ class Window(QMainWindow):
         self.on_event('current', rows[2])
         self.on_event('state', 'downloading')
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
-        self.on_event('transfers', {'active': 4, 'speed': 18.6 * 1024**2, 'summary': summary})
+        self.on_event('transfers', {'active': 4, 'speed': 18.6 * 1024**2, 'summary': summary,
+                                   'files': [row for row in rows if row['state'] == 'downloading']})
         self.on_event('verification', {'name': rows[1]['name'], 'detail': 'Checking archive without a password: attempt 2/3…'})
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')

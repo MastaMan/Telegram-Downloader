@@ -521,7 +521,8 @@ class Engine:
         speed = sum(row['speed'] for row in self.transfers.values()
                     if now - row['updated'] < 4) if self.gate.is_set() else 0
         self.emit('transfers', {'active': len(self.transfers), 'speed': speed,
-                               'summary': summary})
+                               'summary': summary,
+                               'files': [dict(row, message=message) for message, row in self.transfers.items()]})
 
     async def download_jobs(self, wake):
         account, chat = self.account, self.chat
@@ -596,7 +597,8 @@ class Engine:
 
     async def download_job(self, job, wake, account, chat, filenames):
         after = job['message']
-        self.transfers[after] = {'done': job['done'], 'size': job['size'], 'speed': 0, 'updated': time.monotonic()}
+        self.transfers[after] = {'name': job['name'], 'path': job['path'], 'done': job['done'],
+                                 'size': job['size'], 'speed': 0, 'updated': time.monotonic()}
         self.emit_transfers()
         self.emit('current', job)
         self.store.update(account, chat, after, state='downloading', error='')
@@ -622,6 +624,7 @@ class Engine:
                     if str(message.document.id) != job['document'] or message.document.size != job['size']:
                         raise TransferError('The attachment changed since scanning. The old partial file was preserved.')
                     self.prepare_filename(job, message, filenames)
+                    self.transfers[after].update(name=job['name'], path=job['path'])
                     await download(self.client, message, job, self.gate, progress, limiter=self.limiter)
                     break
                 except errors.FloodWaitError as exc:

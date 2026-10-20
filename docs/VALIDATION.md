@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Separate per-file progress bar — 20 October 2026
+
+The full suite ran **175 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 174 with Windows DPAPI skipped; Python **3.15.0** passed 173 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled.
+
+Qt tests distinguish the file's 62% progress from the queue's 38%, preserve a stable automatic target while other files report progress, follow the next active file after completion, and pin a selected row without affecting aggregate progress. They cover reordered queue snapshots, Pause, completed selections, returning to Follow active, clicking the same highlighted row again, active downloads outside the visible queue, completion after the active pool empties, and chat reset. A worker test verifies active-file events contain independent copies of file metadata and byte counts.
+
+The real Qt interface was rendered and visually inspected at 1220×850 and 1000×680. The file's name, byte counts, percentage, progress bar, and Follow active control fit alongside the existing aggregate display. The default-size queue still shows at least nine full rows. `interface-preview.png` was refreshed. No real Telegram account or Windows desktop was used; Windows acceptance should check row selection, automatic following, pause/resume, and switching chats during parallel downloads.
+
 ## Shared download speed limit — 20 October 2026
 
 The full suite ran **170 tests per runtime** on macOS. Python **3.12.3** and **3.14.8** passed 169 with Windows DPAPI skipped; Python **3.15.0** passed 168 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell tests were enabled. The real Qt interface was rendered at 1220×850 and 1000×680; the Speed limit dropdown fits beneath Parallel downloads without reducing the queue area.
