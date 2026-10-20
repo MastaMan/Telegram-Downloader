@@ -33,6 +33,8 @@ Aggregate transfer events include independent copies of each active file's messa
 
 The compact queue paints per-row progress through `ProgressDelegate`, avoiding a widget for every entry. Progress events update both the transferred byte counts and the delegate's numeric value. The single aggregate bar also shows restored/stopped queue progress; rename operations retain their own temporary progress display. Long names and footer messages use `ElidedLabel` with full tooltips so they cannot force the window wider or consume extra queue height. Archive-check controls live in the sidebar, and Activity toggles from the queue header.
 
+`ArrowComboBox` draws the Lucide chevron-down geometry in Qt's native dropdown hit area. Padding reserves space for the icon, disabled controls use a muted stroke, and native popup/search/keyboard handling remains intact. Drawing the small vector directly avoids introducing an external asset that older updaters would omit. Attribution is in `THIRD_PARTY_NOTICES.md`.
+
 Original names are sanitized only for Windows-invalid characters and reserved device names. Case and length are preserved. A shared FilenameAllocator reserves case-folded paths against the entire saved queue and directory entries, including `.part` files; only collisions add `__dup_<number>__`. Each scan/download operation has its own allocator, and workers reserve destinations without yielding. Paths are checked again before the first transfer, so a same-size unrelated file added after scanning is not mistaken for a completed download. Final bytes are checkpointed before finalization; new-style paths require this checkpoint to recover an existing final file.
 
 Additive `naming_version` and `partial_path` columns migrate existing queues without resetting scan cursors. Version 0 denotes legacy/imported paths, 1 denotes a new scanned reservation, and 2 denotes a prepared transfer or restored completed name. An unfinished legacy numbered path is reassigned using fresh Telegram metadata; the old `.part` location is stored atomically alongside the new target. Transfer resumes the old partial and finalizes directly to the new destination in the same directory. No intermediate filesystem rename is necessary during partial-file migration.
@@ -54,6 +56,8 @@ Schema migration adds verification columns to existing queues and resets ZIP-onl
 The authorization state uses Telethon `StringSession` in memory. Only a DPAPI-encrypted JSON payload is persisted. There is no plaintext credential fallback on unsupported platforms. This is not a secure enclave: secrets necessarily exist in process memory while the application runs.
 
 ## Updating and restarting
+
+The header and window title display `tgzip.__version__`, defined in `tgzip/__init__.py`. This display version is separate from the Git commit SHA used for update detection.
 
 The update command runs standard-library network and staging work in one explicit thread pool. Cancellation signals that worker and awaits cleanup before the engine can close. Package initialization eagerly resolves ThreadPoolExecutor before Qt import hooks load; a subprocess regression check covers a Python 3.15 lazy-import incompatibility observed during testing.
 

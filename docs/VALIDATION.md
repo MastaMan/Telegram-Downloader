@@ -1,5 +1,11 @@
 # Validation and release limits
 
+## Header version, dropdown arrows, and Settings — 20 October 2026
+
+The final candidate ran **177 tests** on macOS with Python **3.14.8** and portable PowerShell enabled: **176 passed, 1 skipped** (Windows DPAPI), exit code 0. Interpreter and Python syntax checks passed. The header version, Lucide dropdown chevrons, and renamed Settings block were visually inspected at 1220×850 and 1000×680; the documentation screenshot was refreshed.
+
+An offscreen interaction check clicked each of the three arrow hit areas, confirmed the list opened and closed with Escape, and checked that chat search remains editable. Disabled download-count controls retain a muted arrow. No Windows desktop or live Telegram account was used; native Windows rendering and interaction remain an acceptance check.
+
 ## Denser interface and informative queue — 20 October 2026
 
 The full suite ran **177 tests** on macOS with Python **3.14.8**: **176 passed, 1 skipped** (Windows DPAPI), exit code 0. Portable PowerShell launcher tests were enabled. These results describe the local candidate; they do not establish publication.

@@ -2,15 +2,16 @@ import json
 import time
 from pathlib import Path
 import qrcode
-from PySide6.QtCore import Qt, QTimer, QUrl, QRect
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette
+from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyle,
+    QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
 from .storage import parallel_downloads, speed_limit, SPEED_LIMITS
+from . import __version__
 
 STYLE = '''
 QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 13px; }
@@ -32,8 +33,10 @@ QPushButton#primary:hover { background: #639bff; }
 QPushButton#primary:disabled { background: #273d60; color: #7d91af; border-color: #273d60; }
 QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 4px 6px; min-height: 20px; selection-background-color: #3868ae; }
 QLineEdit:focus, QComboBox:focus { border-color: #5996ff; }
+QComboBox { padding-right: 28px; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
 QComboBox::drop-down { width: 24px; border: none; }
+QComboBox::down-arrow { image: none; width: 0; height: 0; }
 QCheckBox { background: transparent; }
 QProgressBar { background: #26334a; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
 QProgressBar::chunk { background: #5c9aff; border-radius: 3px; }
@@ -70,6 +73,27 @@ def label(text, name=None):
     if name:
         widget.setObjectName(name)
     return widget
+
+
+class ArrowComboBox(QComboBox):
+    """Draw a Lucide chevron in Qt's native clickable dropdown area."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        arrow = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option,
+            QStyle.SubControl.SC_ComboBoxArrow, self)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(arrow.center().x() - 8, arrow.center().y() - 8)
+        painter.scale(16 / 24, 16 / 24)
+        color = '#a8b9cf' if self.isEnabled() else '#53647d'
+        painter.setPen(QPen(QColor(color), 2, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        # Lucide chevron-down: m6 9 6 6 6-6. See THIRD_PARTY_NOTICES.md.
+        painter.drawPolyline(QPolygonF([QPointF(6, 9), QPointF(12, 15), QPointF(18, 9)]))
 
 
 class ElidedLabel(QLabel):
@@ -266,7 +290,7 @@ class Window(QMainWindow):
         self.checker_path = None
         self.verification_info = None
         self.update_plan = None
-        self.setWindowTitle('Telegram Archive Desktop' + (' — Preview' if demo else ''))
+        self.setWindowTitle(f'Telegram Archive Desktop v{__version__}' + (' — Preview' if demo else ''))
         self.resize(1220, 850)
         self.setMinimumSize(1000, 680)
         self.setStyleSheet(STYLE)
@@ -292,9 +316,12 @@ class Window(QMainWindow):
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setFixedSize(28, 28)
         header.addWidget(logo)
-        title_box = QVBoxLayout()
-        title_box.setSpacing(3)
+        title_box = QHBoxLayout()
+        title_box.setSpacing(8)
         title_box.addWidget(label('Telegram Archive Desktop', 'title'))
+        self.version_label = label(f'v{__version__}', 'muted')
+        self.version_label.setToolTip('Application version')
+        title_box.addWidget(self.version_label)
         header.addLayout(title_box)
         header.addStretch()
         self.update_btn = button('Check updates', lambda: self.send('update'))
@@ -329,7 +356,7 @@ class Window(QMainWindow):
         sidebar.addWidget(account_card)
         source_card, source_layout = card()
         source_layout.addWidget(label('Groups & channels', 'section'))
-        self.chat_box = QComboBox()
+        self.chat_box = ArrowComboBox()
         self.chat_box.setEditable(True)
         self.chat_box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.chat_box.setMinimumContentsLength(10)
@@ -344,7 +371,7 @@ class Window(QMainWindow):
         source_layout.addWidget(self.refresh_btn)
         sidebar.addWidget(source_card)
         dest_card, dest_layout = card()
-        dest_layout.addWidget(label('SAVE TO', 'muted'))
+        dest_layout.addWidget(label('Settings', 'section'))
         self.folder_label = ElidedLabel('Choose a download folder', 'section')
         dest_layout.addWidget(self.folder_label)
         self.folder_btn = button('Choose…', self.choose_folder)
@@ -355,7 +382,7 @@ class Window(QMainWindow):
         dest_layout.addLayout(folder_actions)
         parallel_row = QHBoxLayout()
         parallel_row.addWidget(label('Parallel downloads', 'muted'))
-        self.parallel_box = QComboBox()
+        self.parallel_box = ArrowComboBox()
         for count in range(1, 21):
             self.parallel_box.addItem(str(count), count)
         self.parallel_box.setCurrentIndex(19)
@@ -366,7 +393,7 @@ class Window(QMainWindow):
         dest_layout.addLayout(parallel_row)
         speed_row = QHBoxLayout()
         speed_row.addWidget(label('Speed limit', 'muted'))
-        self.speed_box = QComboBox()
+        self.speed_box = ArrowComboBox()
         for limit in SPEED_LIMITS:
             self.speed_box.addItem('Unlimited' if not limit else f'{limit:g} MB/s', limit)
         self.speed_box.setToolTip('Total download speed across all files. Changes apply while downloading.')
@@ -732,6 +759,7 @@ class Window(QMainWindow):
             self.selected = value
             self.chat_box.blockSignals(True)
             self.chat_box.setCurrentIndex(self.chat_box.findData(value) if value is not None else -1)
+            self.chat_box.lineEdit().setCursorPosition(0)
             self.chat_box.blockSignals(False)
             self.chat_box.setToolTip(self.chat_box.currentText())
         elif name == 'current':

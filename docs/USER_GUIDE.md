@@ -9,6 +9,8 @@
 
 The application is independent of 3ds Max. It runs as a normal desktop program.
 
+The application version appears beside **Telegram Archive Desktop** in the top header and in the window title.
+
 ## 2. Install and launch
 
 Extract **all files** into a writable directory, such as `C:\TelegramDownloader`. Avoid very long paths. Double-click **Start.bat** every time you want to open the app.
@@ -57,7 +59,7 @@ If a private group is missing, check that it opens in Telegram under the same ac
 
 ## 6. Choose where archives are saved
 
-Click **Choose…** under SAVE TO and select a local folder with enough free space. The location is remembered.
+Click **Choose…** in the **Settings** block and select a local folder with enough free space. The location is remembered.
 
 New files are organized as:
 
