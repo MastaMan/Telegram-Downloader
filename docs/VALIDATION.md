@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Patch release 1.0.4: queue backups before updates — 20 October 2026
+
+The update flow now creates a standalone SQLite snapshot plus settings after an update package is ready and before requesting restart. It retains ten completed snapshots in Local AppData, verifies database integrity, flushes pending progress, and blocks installation if backup creation fails. Checks that find no update do not create a snapshot.
+
+Python **3.14.8** on macOS: **201 tests**, 200 passed and one skipped (Windows DPAPI), with portable PowerShell enabled. Coverage includes committed WAL records, saved chat settings, pending progress flush, twelve backups reduced to ten without deleting unrelated files, disk-write failure, missing/corrupt source databases, cancellation during backup, staged-update cleanup, and backup completion before restart handoff. The final 1.0.4 candidate also passed the environment probe, compilation, whitespace checks, version-display checks, and the updater allowlist check for the new module. The documentation preview was refreshed to v1.0.4.
+
+The backup implementation was also exercised on a disposable copy of the owner's supplied database: all **186,916 records** were preserved and the backup passed `integrity_check`. The original attachment's SHA-256 was unchanged. No user database, backup, or private settings are part of the repository. Real Windows update installation remains unverified.
+
 ## Patch release 1.0.3: sidebar visible at startup — 20 October 2026
 
 The final 1.0.3 candidate completed a suite of **192 tests** on macOS with Python **3.14.8**: 191 passed and one skipped (Windows DPAPI). Portable PowerShell was enabled for launcher tests. The environment probe, bytecode compilation, and whitespace checks passed. Header and window-title version checks passed, and offscreen previews were inspected at 1150×640 and 500×340. Real Windows and live Telegram validation were unavailable.

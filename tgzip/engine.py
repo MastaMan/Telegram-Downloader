@@ -14,7 +14,8 @@ from .storage import parallel_downloads, speed_limit, Store, atomic_write, load_
 from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
-from updater import UpdateError, prepare_update, load_plan
+from .queue_backup import backup_before_update
+from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 
 
 def error_text(exc):
@@ -291,10 +292,33 @@ class Engine:
 
     async def update_application(self):
         cancel = threading.Event()
+        self.store.flush_progress()
+        settings_bytes = json.dumps(self.settings, indent=2).encode('utf-8')
+        def prepare_with_backup():
+            plan = prepare_update(Path(__file__).resolve().parents[1],
+                                  lambda text: self.emit('update_progress', text), cancel)
+            if plan:
+                try:
+                    backup = backup_before_update(
+                        self.data_dir, settings_bytes, cancel,
+                        lambda text: self.emit('update_progress', text))
+                    self.emit('log', f'Queue and settings backup saved: {backup}')
+                except BaseException:
+                    import shutil
+                    _, stage, _ = load_plan(plan)
+                    shutil.rmtree(stage, ignore_errors=True)
+                    raise
+            return plan
+        def prepare():
+            try:
+                return prepare_with_backup()
+            except UpdateCancelled:
+                # Cancellation is awaited below; do not leave an exceptional
+                # executor future behind a cancelled asyncio.shield.
+                return None
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix='Application update') as executor:
             operation = asyncio.get_running_loop().run_in_executor(
-                executor, prepare_update, Path(__file__).resolve().parents[1],
-                lambda text: self.emit('update_progress', text), cancel)
+                executor, prepare)
             try:
                 plan = await asyncio.shield(operation)
             except asyncio.CancelledError:

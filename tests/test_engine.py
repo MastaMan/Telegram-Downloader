@@ -774,10 +774,67 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(name == 'update_ready' for name, value in self.events))
 
     async def test_prepared_update_requests_orderly_ui_restart(self):
+        import sqlite3
+        self.queue_files(1)
+        self.engine.store.stage_progress(123, -100, 1, 50)
+        self.engine.settings['selected_chats'] = {'123': -100}
         with patch('tgzip.engine.prepare_update', return_value='prepared-plan.json'):
             await self.engine.update_application()
+        snapshots = list((self.root / 'backups').glob('update-*'))
+        self.assertEqual(len(snapshots), 1)
+        self.assertTrue((snapshots[0] / 'queue.sqlite3').is_file())
+        db = sqlite3.connect(snapshots[0] / 'queue.sqlite3')
+        try:
+            self.assertEqual(db.execute('SELECT done FROM jobs').fetchone()[0], 50)
+        finally:
+            db.close()
+        self.assertEqual(json.loads((snapshots[0] / 'settings.json').read_text()), self.engine.settings)
+        self.assertLess(next(i for i, (name, value) in enumerate(self.events)
+                             if name == 'log' and 'backup saved' in value),
+                        self.events.index(('update_ready', 'prepared-plan.json')))
         self.assertIn(('update_ready', 'prepared-plan.json'), self.events)
         self.assertFalse(self.engine.closing)
+
+    async def test_current_version_does_not_create_backup(self):
+        with patch('tgzip.engine.prepare_update', return_value=None):
+            await self.engine.update_application()
+        self.assertFalse((self.root / 'backups').exists())
+        self.assertFalse(any(name == 'update_ready' for name, _ in self.events))
+
+    async def test_backup_failure_prevents_restart_and_cleans_staged_update(self):
+        from updater import UpdateError
+        stage = self.root / 'staged-update'
+        stage.mkdir()
+        with patch('tgzip.engine.prepare_update', return_value=str(stage / 'plan.json')), \
+             patch('tgzip.engine.load_plan', return_value=(self.root, stage, {})), \
+             patch('tgzip.engine.backup_before_update', side_effect=UpdateError('Backup failed')):
+            with self.assertRaises(UpdateError):
+                await self.engine.update_application()
+        self.assertFalse(stage.exists())
+        self.assertFalse(any(name == 'update_ready' for name, _ in self.events))
+
+    async def test_cancel_waits_for_backup_worker_and_removes_update_stage(self):
+        import threading
+        from updater import cancelled
+        entered, stopped = threading.Event(), threading.Event()
+        stage = self.root / 'staged-update'
+        stage.mkdir()
+        def backup(data_dir, settings, cancel, report):
+            entered.set()
+            try:
+                cancel.wait(3)
+                cancelled(cancel)
+            finally:
+                stopped.set()
+        with patch('tgzip.engine.prepare_update', return_value=str(stage / 'plan.json')), \
+             patch('tgzip.engine.load_plan', return_value=(self.root, stage, {})), \
+             patch('tgzip.engine.backup_before_update', side_effect=backup):
+            self.engine.launch('updating', self.engine.update_application)
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            await asyncio.wait_for(self.engine.cancel(), 1)
+        self.assertTrue(stopped.is_set())
+        self.assertFalse(stage.exists())
+        self.assertFalse(any(name == 'update_ready' for name, _ in self.events))
 
     async def test_error_messages_do_not_echo_exception_contents(self):
         self.assertNotIn('private-token', error_text(RuntimeError('private-token')))

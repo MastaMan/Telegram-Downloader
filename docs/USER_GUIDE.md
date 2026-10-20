@@ -240,10 +240,18 @@ Windows is required for real account storage. Other operating systems can previe
 
 1. Click Check updates. The footer shows checking and download progress. If the installed version matches GitHub, it shows **You are up to date**.
 2. If a newer version is available, preparation runs in the background. Stop or close cancels preparation and waits for its cleanup. Network requests have timeouts; cancellation may briefly wait for a request to return.
-3. Once the package is ready, the application saves its queue and session, disconnects, and closes. A separate updater waits for the process to exit before changing application files. No extra confirmation or second launcher is needed.
+3. Once the package is ready, the application creates and verifies a backup of its queue and settings. It then saves its session, disconnects, and closes. A separate updater waits for the process to exit before changing application files. No extra confirmation or second launcher is needed.
 4. The updater restarts through `bootstrap.py`, which checks the environment and installs changed pinned dependencies if required. Your saved account and last chat reconnect normally. Press Start when you want to resume downloads/checks; an update does not start them automatically.
 
 The update source is the latest commit on `MastaMan/Telegram-Downloader`'s public **main** branch, not GitHub Releases or prerelease tags. No GitHub account, token, or administrator rights are needed for a writable ZIP installation. GitHub rate limits, internet outages, insufficient space, locked files, or folder permissions can prevent an update; the application reports this instead of treating it as an up-to-date result.
+
+### Queue backups
+
+Before installing a found update, the app saves a consistent `queue.sqlite3` snapshot and `settings.json` (including the selected chat and download folder) in `%LOCALAPPDATA%\TelegramZipDesktop\backups\update-<UTC timestamp>-<unique ID>`. Activity shows the saved location. The backup includes downloaded history, partial-file progress, queued jobs, and archive-check state; it does not copy archive files or Telegram credentials.
+
+The app keeps the **10 latest successful update backups**, removing older managed snapshots only after a new backup is complete and its database passes an integrity check. An up-to-date check does not create a backup. If backup creation or retention fails, the update is not installed. Cancellation waits for the backup worker to finish and removes incomplete copies.
+
+This protection applies to updates initiated by a version that already contains this feature. Updating from an older version to the first version with backups cannot retroactively back up that earlier update. Keep an existing manual copy for that transition. These data backups are separate from the application-file rollback backups in `.updates`; do not replace a running application's database with a backup.
 
 For an extracted ZIP installation, the app downloads a commit-pinned archive, rejects unsafe paths and symbolic links, verifies staged checksums before installation, and checks Python syntax with your current interpreter. It only replaces managed source, launcher, test, and documentation files. It does not replace `.venv`, Local AppData, Telegram credentials, queue databases, `Archive.zip`, or downloaded archives. Obsolete files are removed only if a previous update recorded them as managed.
 
