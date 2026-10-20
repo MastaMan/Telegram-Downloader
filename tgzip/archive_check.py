@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import uuid
+from .storage import FilenameAllocator
 
 BAD_CODES = {2, 3, 11}
 
@@ -91,10 +91,7 @@ def quarantine_destination(source):
     source = Path(source)
     folder = source.parent / 'wrong_archives'
     folder.mkdir(parents=True, exist_ok=True)
-    destination = folder / source.name
-    while destination.exists():
-        destination = folder / f'{source.stem}_bad_{uuid.uuid4().hex[:8]}{source.suffix}'
-    return destination
+    return FilenameAllocator([]).allocate(folder, source.name)
 
 
 def move_to_quarantine(source, destination):

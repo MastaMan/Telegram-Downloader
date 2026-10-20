@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Preserve original archive filenames — 20 October 2026
+
+The full suite ran **137 tests per runtime** on macOS: Python **3.12.3** and **3.14.8** passed 136 with Windows DPAPI skipped; Python **3.15.0** passed 135 with Windows DPAPI and unavailable cryptg skipped. Portable PowerShell launcher tests were enabled. All three processes exited successfully.
+
+New coverage checks exact preservation of case, Unicode, spaces, and names longer than the previous 85-character limit; collisions with queue reservations, files, directories, and partial downloads; reservation persistence across database reopen; and account-folder isolation. A real-file transfer simulation downloads twenty identically named archives concurrently, verifies every file's distinct bytes, and repeats the scan to check stable assignments. A same-size unrelated file introduced after scanning receives protection rather than being mistaken for a completed download.
+
+Legacy migration tests persist an old partial/new final path pair, reopen the database, and finish from the existing byte offset under the full original Telegram name. Already completed legacy files remain unchanged. Other checks cover incomplete-file conflicts, durable-completion recovery, explicit failure for an over-limit name instead of silent truncation, and the same removable duplicate prefix inside wrong_archives.
+
+Windows filesystem behavior and live Telegram downloads remain unverified here. On Windows, update with a partially downloaded old queue, finish it, and compare the final name with Telegram. Test duplicate ZIP/RAR names, uppercase extensions, a pre-existing unrelated file, Pause/Stop/restart, and quarantine collisions. Verify Total Commander previews prefix removal correctly before applying it to completed files in folders without resulting name conflicts.
+
 ## Automatic Python preparation and manual CI — 20 October 2026
 
 The Windows entry point now selects standard Python 3.14 or downloads the official full CPython 3.14.8 x64 runtime ZIP into per-user application storage. The published SHA-256 was read from the [official Windows release manifest](https://www.python.org/ftp/python/3.14.8/windows-3.14.8.json). A real download was verified against `4873947a8afc037846b180312b83c744a4146a851cfd316a75c3125a4d8299da`; its 2,203 entries include python.exe, pythonw.exe, venv, ensurepip, and tkinter. The Windows binaries were inspected, not executed on macOS.

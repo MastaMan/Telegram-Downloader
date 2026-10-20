@@ -345,6 +345,7 @@ class Engine:
             raise TransferError('Choose a download folder first.')
         root = Path(folder).resolve() / f'account_{account}' / f'chat_{chat}'
         cursor = self.store.cursor(account, chat)
+        filenames = self.store.filename_allocator()
         if not cursor:
             self.emit('log', 'Scanning full history for ZIP and RAR archives. Existing queue entries are preserved.')
         count, last = 0, 0
@@ -353,10 +354,10 @@ class Engine:
             item = None
             doc = message.document
             extension = archive_extension(message.file.name, doc.mime_type) if doc and message.file else None
-            if extension:
+            if extension and not self.store.contains(account, chat, message.id):
                 name = safe_name(message.file.name or f'archive_{message.id}{extension}')
                 item = {'document': doc.id, 'name': name, 'size': doc.size,
-                        'path': root / f'{message.id}_{doc.id}_{name}'}
+                        'path': filenames.allocate(root, name), 'naming_version': 1}
             self.store.scanned(account, chat, message.id, item)
             count += 1
             now = time.monotonic()
@@ -426,6 +427,7 @@ class Engine:
     async def download_jobs(self, wake):
         account, chat = self.account, self.chat
         after = 0
+        filenames = self.store.filename_allocator()
 
         async def worker():
             nonlocal after
@@ -437,7 +439,7 @@ class Engine:
                 if job is None:
                     return
                 after = job['message']
-                await self.download_job(job, wake, account, chat)
+                await self.download_job(job, wake, account, chat, filenames)
 
         finished = asyncio.Event()
 
@@ -469,7 +471,31 @@ class Engine:
             self.store.flush_progress()
             self.emit_transfers()
 
-    async def download_job(self, job, wake, account, chat):
+    def prepare_filename(self, job, message, filenames):
+        if job['naming_version'] >= 2:
+            return
+        old = Path(job['path'])
+        legacy = (job['naming_version'] == 0 and
+                  old.name == f"{job['message']}_{job['document']}_{job['name']}")
+        # A completed old file may be awaiting its final database checkpoint.
+        if legacy and old.exists():
+            return
+        # Preserve paths from other queue/import formats.
+        if job['naming_version'] == 0 and not legacy:
+            values = {'naming_version': 2}
+        else:
+            original = getattr(getattr(message, 'file', None), 'name', None)
+            name = safe_name(original or job['name'])
+            path = filenames.allocate(old.parent, name, previous=old)
+            old_part = old.with_name(old.name + '.part')
+            # Persist the old temporary location with the new final path in ONE
+            # transaction. No move is needed, even if the process exits here.
+            partial = str(old_part) if legacy and old_part.exists() else ''
+            values = {'name': name, 'path': str(path), 'partial_path': partial, 'naming_version': 2}
+        self.store.update(job['account'], job['chat'], job['message'], **values)
+        job.update(values)
+
+    async def download_job(self, job, wake, account, chat, filenames):
         after = job['message']
         self.transfers[after] = {'done': job['done'], 'size': job['size'], 'speed': 0, 'updated': time.monotonic()}
         self.emit_transfers()
@@ -478,6 +504,11 @@ class Engine:
         downloaded = False
         def progress(done, speed):
             self.store.stage_progress(account, chat, job['message'], done)
+            if done == job['size']:
+                # Durable evidence before final rename lets a restart recover
+                # our completed file without accepting arbitrary same-size files.
+                self.store.flush_progress()
+                job['done'] = done
             self.transfers[after].update(done=done, speed=speed, updated=time.monotonic())
             self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
                                    'message': job['message']})
@@ -491,6 +522,7 @@ class Engine:
                         raise TransferError('Message was deleted or the attachment is no longer accessible.')
                     if str(message.document.id) != job['document'] or message.document.size != job['size']:
                         raise TransferError('The attachment changed since scanning. The old partial file was preserved.')
+                    self.prepare_filename(job, message, filenames)
                     await download(self.client, message, job, self.gate, progress)
                     break
                 except errors.FloodWaitError as exc:
@@ -571,8 +603,8 @@ class Engine:
             if path.is_symlink() or not path.is_file() or path.stat().st_size != job['size']:
                 update(verification='error', verification_error='Local file is missing, changed, or a symbolic link. It was not moved.')
                 return
-            # Telegram filenames have unique prefixes; multipart sets cannot be
-            # tested reliably until the user restores names and gathers all parts.
+            # A sibling volume may still be queued or downloading. Check complete
+            # multipart sets manually rather than misclassifying missing volumes.
             if re.search(r'\.part\d+\.rar$', job['name'], re.IGNORECASE):
                 update(verification='error', verification_error='Multipart RAR: check the complete set manually in WinRAR. No files were moved.')
                 return

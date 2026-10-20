@@ -13,7 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from tgzip.security import Vault, _crypt, import_legacy_session, validate_keys
-from tgzip.storage import CHUNK, Store, atomic_write, load_settings, safe_name, archive_extension
+from tgzip.storage import CHUNK, Store, FilenameAllocator, atomic_write, load_settings, safe_name, archive_extension
 from tgzip.transfer import TransferError, download
 
 
@@ -172,8 +172,7 @@ class StorageTests(unittest.TestCase):
     def test_windows_filename_sanitizing(self):
         for name in ['../../CON.zip', 'PRN.zip', 'name<>:"|?*\\a.ZIP', 'x' * 500 + '.zip', '.zip']:
             result = safe_name(name)
-            self.assertTrue(result.endswith('.zip'))
-            self.assertLessEqual(len(result), 90)
+            self.assertTrue(result.lower().endswith('.zip'))
             self.assertNotRegex(result, r'[<>:"/\\|?*]')
         self.assertEqual(safe_name('CON.zip'), '_CON.zip')
 
@@ -192,8 +191,34 @@ class StorageTests(unittest.TestCase):
         ]:
             with self.subTest(name=name, mime=mime):
                 self.assertEqual(archive_extension(name, mime), expected)
-        self.assertEqual(safe_name('CON.RAR'), '_CON.rar')
-        self.assertTrue(safe_name('a' * 500 + '.RAR').endswith('.rar'))
+        self.assertEqual(safe_name('CON.RAR'), '_CON.RAR')
+        self.assertTrue(safe_name('a' * 500 + '.RAR').endswith('.RAR'))
+
+    def test_original_names_preserve_case_unicode_spaces_and_long_stems(self):
+        for name in ['Chair Design v2.ZIP', 'Кресло 你好.RAR', 'a' * 180 + '.ZIP',
+                     '.zip', ' leading space.zip', 'chair.part01.rar']:
+            self.assertEqual(safe_name(name), name)
+
+    def test_filename_collisions_include_queue_disk_directories_and_partials(self):
+        (self.root / 'MODEL.ZIP').write_bytes(b'original')
+        (self.root / '__dup_2__model.zip.part').write_bytes(b'partial')
+        (self.root / '__dup_3__model.zip').mkdir()
+        allocator = FilenameAllocator([self.root / '__dup_4__model.zip'])
+        self.assertEqual(allocator.allocate(self.root, 'model.zip').name, '__dup_5__model.zip')
+        self.assertEqual(allocator.allocate(self.root, 'model.zip').name, '__dup_6__model.zip')
+        self.assertEqual((self.root / 'MODEL.ZIP').read_bytes(), b'original')
+        self.assertEqual(allocator.allocate(self.root, 'unique.RAR').name, 'unique.RAR')
+
+    def test_filename_reservation_survives_reopen_and_keeps_accounts_separate(self):
+        allocator = self.store.filename_allocator()
+        for number in range(1, 4):
+            path = allocator.allocate(self.root, 'pack.zip')
+            self.store.scanned(1, 10, number, dict(self.item(), path=path, naming_version=1))
+        self.store.close()
+        self.store = Store(self.root / 'queue.db')
+        allocator = self.store.filename_allocator()
+        self.assertEqual(allocator.allocate(self.root, 'pack.zip').name, '__dup_4__pack.zip')
+        self.assertEqual(allocator.allocate(self.root / 'another-account', 'pack.zip').name, 'pack.zip')
 
     def test_upgrade_rescans_once_without_losing_files(self):
         self.store.scanned(1, 10, 9, self.item())
@@ -320,6 +345,37 @@ class TransferTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TransferError):
             await self.run_download()
         self.assertEqual(self.target.read_bytes(), b'keep me')
+
+    async def test_existing_same_size_file_beside_partial_is_not_accepted(self):
+        self.target.write_bytes(b'X' * len(self.data))
+        self.part.write_bytes(self.data[:CHUNK])
+        with self.assertRaises(TransferError):
+            await self.run_download()
+        self.assertEqual(self.target.read_bytes(), b'X' * len(self.data))
+        self.assertEqual(self.part.read_bytes(), self.data[:CHUNK])
+
+    async def test_new_name_requires_saved_completion_before_crash_recovery(self):
+        self.target.write_bytes(self.data)
+        self.job.update(naming_version=2, done=0)
+        with self.assertRaises(TransferError):
+            await self.run_download()
+        self.job['done'] = len(self.data)
+        client = await self.run_download()
+        self.assertEqual(client.streams, [])
+
+    async def test_legacy_partial_finishes_under_original_name(self):
+        legacy = self.root / '123_456_archive.zip.part'
+        legacy.write_bytes(self.data[:CHUNK])
+        self.job['partial_path'] = str(legacy)
+        client = await self.run_download()
+        self.assertEqual(client.offsets, [CHUNK])
+        self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertFalse(legacy.exists())
+
+    async def test_oversized_name_is_reported_without_silent_truncation(self):
+        self.job['path'] = str(self.root / ('x' * 251 + '.zip'))
+        with self.assertRaisesRegex(TransferError, 'not shortened'):
+            await self.run_download()
 
     async def test_complete_corrupt_content_is_kept_for_separate_verification(self):
         self.data = b'this is not an archive'

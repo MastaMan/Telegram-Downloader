@@ -205,6 +205,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.verify(CheckResult('bad', 'bad', 3))
         second = Path(self.job()['quarantine_path'])
         self.assertNotEqual(first, second)
+        self.assertEqual(second.name, f'__dup_2__{first.name}')
         self.assertEqual(first.read_bytes(), b'existing quarantined archive')
         self.assertEqual(second.read_bytes(), b'fixture archive bytes')
 

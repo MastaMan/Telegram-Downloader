@@ -30,6 +30,7 @@ Intermediate download progress is batched into one database transaction about on
 - **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
+- Original filenames are preserved, including extension case and long names. Only collisions add a removable prefix such as `__dup_2__`; Windows-invalid characters still need replacement.
 - Automatic background checks with installed WinRAR after each download, while other files download, plus **Check archives** for previously downloaded files. Three confirmed password/archive failures move the file to `wrong_archives` without overwriting existing files.
 - Pause, resume, stop, network retries, rate-limit waits, and resumable `.part` files.
 - Durable SQLite queue and incremental history-scan checkpoints, isolated by Telegram account and chat.

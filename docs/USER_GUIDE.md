@@ -63,22 +63,29 @@ New files are organized as:
 
 ```text
 <chosen folder>\account_<account ID>\chat_<chat ID>\
-    <message ID>_<document ID>_<safe original filename>.zip
-    <message ID>_<document ID>_<safe original filename>.rar
+    Chair Model.ZIP
+    Living Room.rar
+    __dup_2__Chair Model.ZIP    (only if that name is already taken)
     wrong_archives\    (files that failed three archive checks)
 ```
 
-The identifiers prevent collisions when two attachments have the same name. Windows-invalid filename characters are replaced, reserved names are handled, and long names are shortened. Keep the chosen folder path short enough for Windows path limits; `C:\TelegramFiles` is a good example.
+Original filenames are preserved, including spaces, Unicode, and `.ZIP` / `.RAR` capitalization. No message/document numbers are added and long names are not silently shortened. Windows-invalid characters are replaced and reserved device names receive an underscore. A nameless attachment uses `archive_<message ID>.zip` or `.rar`. Names that exceed the filesystem's limits are reported as errors. Keep the chosen folder path short enough for Windows path limits; `C:\TelegramFiles` is a good example.
+
+If a name is already used by another queue entry, a local file, a folder, or a partial download, the next available prefix is added: `__dup_2__`, `__dup_3__`, and so on. Comparisons ignore case, as on Windows. The same prefix convention applies to collisions inside `wrong_archives`. Existing files are never deliberately overwritten.
+
+To remove an added prefix later, select the relevant files in Total Commander's **Multi-Rename Tool**, enable **RegEx**, search for `^__dup_[0-9]+__`, and leave **Replace with** empty. Keep the filename/extension masks unchanged and review the preview before applying. Separate duplicates into different folders first if removing prefixes would recreate identical names. Only select files to which the app added a prefix. See [Total Commander's rename tool](https://www.ghisler.com/screenshots/en/06.html). Finish downloads and archive checks before renaming: saved queue paths do not track external renames.
+
+After updating, unfinished entries from the old numbered-name queue adopt the original Telegram filename when downloaded. Existing partial data stays at its saved temporary path and is finalized under the new name after completion, including across restarts. Files already downloaded by the older app retain their existing names; they are not renamed or downloaded again.
 
 **Open** opens the currently selected base folder in Explorer. Hover over a queue row to see that file's full path, or its error if it has failed.
 
-Changing the folder applies to **newly discovered files**. Existing queue entries retain their original paths, so incomplete downloads can still resume safely. Do not move `.part` files while downloading.
+Changing the folder applies to **newly discovered files**. Existing queue entries retain their destination folders, so incomplete downloads can still resume safely. Do not move `.part` files while downloading.
 
 ## 7. Scan and download
 
 **Scan archives** reads message history from oldest to newest and saves matching ZIP and RAR documents to the queue. The first scan can take time in a large group. The footer shows the number of messages checked; the queue fills as files are found.
 
-Only filenames ending in `.zip` or `.rar` are selected, case-insensitively. If a document has no filename, its MIME type must indicate ZIP or RAR. An explicit filename takes precedence over MIME metadata: `.zip.exe`, `.rar.exe`, `.7z`, `.z01`, and legacy `.r00` files are excluded. Modern `.part01.rar` volumes are downloaded individually, but are not assembled or automatically verified. Restore original volume names and collect all parts before checking such a set manually in WinRAR.
+Only filenames ending in `.zip` or `.rar` are selected, case-insensitively. If a document has no filename, its MIME type must indicate ZIP or RAR. An explicit filename takes precedence over MIME metadata: `.zip.exe`, `.rar.exe`, `.7z`, `.z01`, and legacy `.r00` files are excluded. Modern `.part01.rar` volumes are downloaded individually, but are not assembled or automatically verified. Collect all parts with matching original volume names before checking such a set manually in WinRAR.
 
 On the first launch after upgrading from the ZIP-only release, scan checkpoints reset once so the next **Scan archives** can discover older RAR files. Existing queue rows, partial files, and completed ZIPs stay intact. Subsequent scans resume incrementally as before.
 

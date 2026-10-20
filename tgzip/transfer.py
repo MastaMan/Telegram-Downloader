@@ -12,22 +12,28 @@ class TransferError(Exception):
 
 async def download(client, message, job, gate, progress):
     target = Path(job['path'])
-    part = target.with_name(target.name + '.part')
+    part = Path(job.get('partial_path') or target.with_name(target.name + '.part'))
+    if len((target.name + '.part').encode('utf-16-le')) // 2 > 255:
+        raise TransferError('Original filename exceeds the Windows filename limit. It was not shortened.')
     target.parent.mkdir(parents=True, exist_ok=True)
     expected = job['size']
     extension = target.suffix.lower()
     if extension not in {'.zip', '.rar'}:
         raise TransferError('Only ZIP and RAR attachments are supported.')
+    if part.is_symlink() or target.is_symlink():
+        raise TransferError('Symbolic links are not supported as download files.')
     if target.exists():
+        if part.exists():
+            raise TransferError('Destination already exists beside a partial download. Move the destination away and retry.')
+        if job.get('naming_version', 0) >= 2 and job.get('done', 0) != expected:
+            raise TransferError('Destination appeared before this download completed. Move it away and retry.')
         if target.stat().st_size == expected:
             progress(expected, 0)
             return
         raise TransferError('Destination already exists with different or invalid contents. Move it away and retry.')
-    if part.is_symlink() or target.is_symlink():
-        raise TransferError('Symbolic links are not supported as download files.')
     offset = resume_offset(part, expected)
     stream = None
-    with open(part, 'r+b' if part.exists() else 'w+b') as f:
+    with open(part, 'r+b' if part.exists() else 'x+b') as f:
         f.truncate(offset)
         f.seek(offset)
         progress(offset, 0)

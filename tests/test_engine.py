@@ -102,8 +102,119 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen_min_ids, [0, 6])
         jobs = self.engine.store.jobs(123, -100)
         self.assertEqual([job['message'] for job in jobs], [1, 3, 4, 5])
+        self.assertEqual([Path(job['path']).name for job in jobs],
+                         ['one.ZIP', 'two.zip', 'pack.RAR', 'archive_5.rar'])
         self.assertNotEqual(jobs[0]['path'], jobs[1]['path'])
         self.assertTrue(jobs[-1]['path'].endswith('.rar'))
+
+    async def test_twenty_identical_names_download_to_distinct_files(self):
+        self.engine.chat = -100
+        messages = [SimpleNamespace(id=i, document=SimpleNamespace(id=i, size=100, mime_type='application/zip'),
+                                    file=SimpleNamespace(name='Model.ZIP'), media=i) for i in range(1, 21)]
+        async def iter_messages(*args, **kwargs):
+            for message in messages:
+                yield message
+        async def get_messages(entity, ids):
+            return messages[ids - 1]
+        class Stream:
+            def __init__(stream, number):
+                stream.number = number
+            def __aiter__(stream):
+                return stream
+            async def __anext__(stream):
+                await asyncio.sleep(.001)
+                return bytes([stream.number]) * 100
+            async def close(stream):
+                pass
+        self.engine.client = SimpleNamespace(iter_messages=iter_messages, get_messages=get_messages,
+                                              iter_download=lambda media, **kwargs: Stream(media))
+        await self.engine.scan()
+        # A repeated full scan must not change assignments or reserve phantom names.
+        self.engine.store.db.execute('UPDATE scans SET cursor=0')
+        self.engine.store.db.commit()
+        await self.engine.scan()
+        with patch.object(self.engine, 'checker', return_value=None):
+            await self.engine.download_queue()
+        jobs = self.engine.store.jobs(123, -100)
+        self.assertEqual([Path(job['path']).name for job in jobs],
+                         ['Model.ZIP'] + [f'__dup_{i}__Model.ZIP' for i in range(2, 21)])
+        for job in jobs:
+            self.assertEqual(job['state'], 'done')
+            self.assertEqual(Path(job['path']).read_bytes(), bytes([job['message']]) * 100)
+
+    async def test_file_added_after_scan_is_preserved_even_with_same_size(self):
+        self.queue_files(1)
+        self.engine.store.update(123, -100, 1, naming_version=1)
+        original = self.root / '1.zip'
+        original.write_bytes(b'X' * 100)
+        async def transfer(client, message, job, gate, progress):
+            self.assertEqual(Path(job['path']).name, '__dup_2__1.zip')
+            Path(job['path']).write_bytes(b'Y' * 100)
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            await self.engine.download_queue()
+        self.assertEqual(original.read_bytes(), b'X' * 100)
+        self.assertEqual((self.root / '__dup_2__1.zip').read_bytes(), b'Y' * 100)
+
+    async def test_legacy_partial_migration_survives_exit_before_transfer(self):
+        from tgzip.storage import CHUNK, Store
+        self.engine.chat = -100
+        original = 'Original Model ' + 'x' * 100 + '.RAR'
+        old_name = 'Original Model ' + 'x' * 70 + '.rar'
+        old = self.root / f'10_111_{old_name}'
+        part = old.with_name(old.name + '.part')
+        part.write_bytes(b'x' * CHUNK)
+        self.engine.store.scanned(123, -100, 10, {
+            'document': 111, 'name': old_name, 'size': CHUNK * 2, 'path': old})
+        job = self.engine.store.jobs(123, -100)[0]
+        message = SimpleNamespace(file=SimpleNamespace(name=original))
+        self.engine.prepare_filename(job, message, self.engine.store.filename_allocator())
+        self.assertEqual(Path(job['path']).name, original)
+        self.assertEqual(job['partial_path'], str(part))
+        self.assertEqual(part.stat().st_size, CHUNK)
+        self.engine.store.close()
+        self.engine.store = Store(self.root / 'queue.sqlite3')
+        reopened = self.engine.store.jobs(123, -100)[0]
+        self.engine.prepare_filename(reopened, message, self.engine.store.filename_allocator())
+        self.assertEqual(reopened, job)
+        self.assertEqual(part.stat().st_size, CHUNK)
+        offsets = []
+        class Stream:
+            def __aiter__(stream):
+                return stream
+            async def __anext__(stream):
+                return b'y' * CHUNK
+            async def close(stream):
+                pass
+        def iter_download(media, offset, **kwargs):
+            offsets.append(offset)
+            return Stream()
+        async def get_messages(*args, **kwargs):
+            return SimpleNamespace(document=SimpleNamespace(id=111, size=CHUNK * 2),
+                                   file=SimpleNamespace(name=original), media=111)
+        self.engine.client = SimpleNamespace(get_messages=get_messages, iter_download=iter_download)
+        with patch.object(self.engine, 'checker', return_value=None):
+            await self.engine.download_queue()
+        self.assertEqual(offsets, [CHUNK])
+        self.assertEqual((self.root / original).read_bytes(), b'x' * CHUNK + b'y' * CHUNK)
+        self.assertFalse(part.exists())
+        self.assertEqual(self.engine.store.jobs(123, -100)[0]['state'], 'done')
+
+    async def test_legacy_unstarted_queue_uses_original_and_completed_files_stay(self):
+        self.engine.chat = -100
+        for number in (1, 2):
+            old = self.root / f'{number}_{number}_model.rar'
+            self.engine.store.scanned(123, -100, number, {
+                'document': number, 'name': 'model.rar', 'size': 100, 'path': old})
+            if number == 2:
+                old.write_bytes(b'completed')
+                self.engine.store.update(123, -100, number, state='done')
+        job = self.engine.store.jobs(123, -100)[0]
+        self.engine.prepare_filename(job, SimpleNamespace(file=SimpleNamespace(name='model.RAR')),
+                                     self.engine.store.filename_allocator())
+        self.assertEqual(Path(job['path']).name, 'model.RAR')
+        completed = self.engine.store.jobs(123, -100)[1]
+        self.assertEqual(Path(completed['path']).name, '2_2_model.rar')
+        self.assertEqual(Path(completed['path']).read_bytes(), b'completed')
 
     async def test_cancel_scan_keeps_checkpoint(self):
         self.engine.chat = -100

@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
 CHUNK = 512 * 1024
@@ -43,13 +44,56 @@ def load_settings(path):
 
 def safe_name(name):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name)
-    name = name.strip(" .")
-    extension = archive_extension(name, None) or '.zip'
-    stem = name[:-4] if name.lower().endswith(extension) else name
-    stem = stem[:85].rstrip(" .") or "archive"
+    name = name.rstrip(" .")
+    extension = name[-4:] if archive_extension(name, None) else '.zip'
+    stem = name[:-4] if archive_extension(name, None) else name
+    if not name:
+        stem = "archive"
     if stem.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
         stem = "_" + stem
     return stem + extension
+
+
+class FilenameAllocator:
+    """Reserve names before workers yield, including queued files and disk entries."""
+    def __init__(self, paths):
+        self.reserved = Counter(self.key(path) for path in paths if path)
+        self.directories = {}
+
+    @staticmethod
+    def key(path):
+        return str(Path(path).absolute()).casefold()
+
+    def allocate(self, parent, name, previous=None):
+        parent = Path(parent)
+        directory = self.key(parent)
+        if directory not in self.directories:
+            self.directories[directory] = {
+                entry.name.casefold() for entry in parent.iterdir()
+            } if parent.exists() else set()
+        entries = self.directories[directory]
+        previous_key = self.key(previous) if previous else None
+        number = 1
+        while True:
+            filename = name if number == 1 else f'__dup_{number}__{name}'
+            target = parent / filename
+            part = target.with_name(filename + '.part')
+            reserved = any(self.reserved[self.key(path)] >
+                           (1 if self.key(path) == previous_key else 0)
+                           for path in (target, part))
+            # Windows checks are case insensitive. The snapshot also gives
+            # Windows semantics to tests on case-sensitive filesystems.
+            occupied = any(path.name.casefold() in entries for path in (target, part))
+            # Avoid probing names the filesystem cannot represent. Transfer
+            # reports these as errors rather than silently shortening them.
+            if len((filename + '.part').encode('utf-16-le')) // 2 <= 255:
+                occupied |= any(os.path.lexists(path) for path in (target, part))
+            if not reserved and not occupied:
+                if previous_key:
+                    self.reserved[previous_key] -= 1
+                self.reserved[self.key(target)] += 1
+                return target
+            number += 1
 
 
 def archive_extension(name, mime):
@@ -94,6 +138,10 @@ class Store:
             for column, default in [('verification', 'pending'), ('verification_error', ''), ('quarantine_path', '')]:
                 if column not in columns:
                     self.db.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT NOT NULL DEFAULT '{default}'")
+            if 'naming_version' not in columns:
+                self.db.execute("ALTER TABLE jobs ADD COLUMN naming_version INTEGER NOT NULL DEFAULT 0")
+            if 'partial_path' not in columns:
+                self.db.execute("ALTER TABLE jobs ADD COLUMN partial_path TEXT NOT NULL DEFAULT ''")
             if self.db.execute('PRAGMA user_version').fetchone()[0] < 1:
                 # Earlier versions skipped RAR attachments. Revisit history once,
                 # without discarding completed ZIPs, partial files or queued jobs.
@@ -107,12 +155,17 @@ class Store:
         row = self.db.execute("SELECT cursor FROM scans WHERE account=? AND chat=?", (account, chat)).fetchone()
         return row[0] if row else 0
 
+    def contains(self, account, chat, message):
+        return self.db.execute('SELECT 1 FROM jobs WHERE account=? AND chat=? AND message=?',
+                               (account, chat, message)).fetchone() is not None
+
     def scanned(self, account, chat, message, item=None):
         with self.db:
             if item:
                 self.db.execute('''INSERT OR IGNORE INTO jobs
-                    (account,chat,message,document,name,size,path) VALUES (?,?,?,?,?,?,?)''',
-                    (account, chat, message, str(item['document']), item['name'], item['size'], str(item['path'])))
+                    (account,chat,message,document,name,size,path,naming_version) VALUES (?,?,?,?,?,?,?,?)''',
+                    (account, chat, message, str(item['document']), item['name'], item['size'], str(item['path']),
+                     item.get('naming_version', 0)))
             self.db.execute('''INSERT INTO scans VALUES (?,?,?) ON CONFLICT(account,chat)
                 DO UPDATE SET cursor=MAX(cursor,excluded.cursor)''', (account, chat, message))
 
@@ -136,7 +189,8 @@ class Store:
         self.progress_pending.clear()
 
     def update(self, account, chat, message, **values):
-        if not values.keys() <= {"done", "state", "error", "verification", "verification_error", "quarantine_path"}:
+        if not values.keys() <= {"done", "state", "error", "verification", "verification_error", "quarantine_path",
+                                "path", "name", "naming_version", "partial_path"}:
             raise ValueError("Invalid update")
         key = (account, chat, message)
         if key in self.progress_pending:
@@ -146,6 +200,10 @@ class Store:
                             " WHERE account=? AND chat=? AND message=?",
                             (*values.values(), account, chat, message))
         self.progress_pending.pop(key, None)
+
+    def filename_allocator(self):
+        return FilenameAllocator(path for row in self.db.execute('SELECT path,partial_path FROM jobs')
+                                 for path in row)
 
     def jobs(self, account, chat, pending=False, limit=None):
         query = "SELECT * FROM jobs WHERE account=? AND chat=?"
