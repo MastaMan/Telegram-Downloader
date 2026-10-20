@@ -42,9 +42,10 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(window.table.rowCount(), 10)
         self.assertFalse(window.activity.isVisible())
-        self.assertEqual((window.width(), window.height()), (900, 600))
-        self.assertTrue(window.panel_btn.isVisible())
-        self.assertFalse(window.sidebar_scroll.isVisible())
+        self.assertEqual((window.width(), window.height()), (1150, 640))
+        self.assertFalse(window.panel_btn.isVisible())
+        self.assertTrue(window.sidebar_scroll.isVisible())
+        self.assertEqual(window.sidebar_scroll.verticalScrollBar().maximum(), 0)
         self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 8)
         summary = window.transfers_info['summary']
         self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))

@@ -385,7 +385,7 @@ class Window(QMainWindow):
         self.verification_info = None
         self.update_plan = None
         self.setWindowTitle(f'Telegram Archive Desktop v{__version__}' + (' — Preview' if demo else ''))
-        self.resize(900, 600)
+        self.resize(1150, 640)
         self.setMinimumSize(500, 340)
         self.setStyleSheet(STYLE)
         self.build_ui()

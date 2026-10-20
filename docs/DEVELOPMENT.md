@@ -73,7 +73,7 @@ The UI's update-ready event uses the normal close path. After the worker has sto
 
 ## Responsive window
 
-The main window opens at 900×600 with a 500×340 minimum. `apply_window_layout` responds to width and height breakpoints. A scrollable sidebar is moved into a non-modal Settings dialog on demand in compact mode and returned to the main layout when that dialog closes; this reuses live controls and avoids duplicate state or command connections. Activity uses a separate dialog at all sizes. Closing the main window closes both dialogs before shutdown.
+The main window opens at 1150×640 with a 500×340 minimum. `apply_window_layout` responds to width and height breakpoints. A scrollable sidebar is moved into a non-modal Settings dialog on demand in compact mode and returned to the main layout when that dialog closes; this reuses live controls and avoids duplicate state or command connections. Activity uses a separate dialog at all sizes. Closing the main window closes both dialogs before shutdown.
 
 `SettingsPanel` owns the four existing cards in a responsive grid: one column below 640 pixels of content width, two at or above it. The Settings dialog releases the scroll area's fixed sidebar width and uses 12-pixel outer margins with 10-pixel gaps; returning to the main window restores the 240-pixel sidebar. The panel and controls are reparented, never recreated. Download limits use a wrapping form layout. The footer stays outside the scroll area so Close remains accessible.
 

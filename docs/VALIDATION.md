@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Patch release 1.0.3: sidebar visible at startup — 20 October 2026
+
+The final 1.0.3 candidate completed a suite of **192 tests** on macOS with Python **3.14.8**: 191 passed and one skipped (Windows DPAPI). Portable PowerShell was enabled for launcher tests. The environment probe, bytecode compilation, and whitespace checks passed. Header and window-title version checks passed, and offscreen previews were inspected at 1150×640 and 500×340. Real Windows and live Telegram validation were unavailable.
+
+The main window now starts at **1150×640**. The sidebar is immediately visible, with enough height for all four cards in the standard demo layout, while the queue retains approximately the width of the previous compact layout. The minimum size and compact-mode breakpoints are unchanged.
+
+All **26 UI tests** passed on macOS with Python **3.14.8**. The startup check asserts the new dimensions, visible sidebar, hidden compact Settings button, and no vertical sidebar overflow. Existing tests cover shrinking to 500×340 and moving settings between the sidebar and its dialog. The 1150×640 offscreen preview was inspected and saved in the documentation. Real Windows rendering remains unverified.
+
 ## Patch release 1.0.2: responsive Settings — 20 October 2026
 
 The final 1.0.2 candidate passed the Python 3.14 environment probe, bytecode compilation, whitespace checks, and the full 192-test suite below. Header and window-title version checks passed; main-window previews at 900×600 and 500×340 were inspected and the documentation preview was refreshed. The Windows workflow remains manual-only.
