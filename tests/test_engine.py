@@ -35,6 +35,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.account = 123
         self.engine.dialogs = {-100: dialog(-100, 'Group'), -200: dialog(-200, 'Channel', False)}
         self.engine.settings['download_dir'] = str(self.root / 'files')
+        # Global hunting rules have dedicated tests; other tests download every fixture.
+        self.engine.settings.update(name_filter_enabled=False, skip_known=False)
 
     async def asyncTearDown(self):
         await self.engine.cancel()
@@ -338,6 +340,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
     def queue_files(self, count, size=100):
         self.engine.chat = -100
+        # Queued fixtures already sit in the download folder, so they are not relocated.
+        self.engine.settings['download_dir'] = str(self.root)
         for number in range(1, count + 1):
             self.engine.store.scanned(123, -100, number, {
                 'document': number, 'name': f'{number}.zip', 'size': size,

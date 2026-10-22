@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import re
 import threading
 import time
@@ -10,7 +11,8 @@ from telethon.sessions import StringSession
 from telethon.crypto import aes
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
-from .storage import parallel_downloads, speed_limit, Store, atomic_write, load_settings, safe_name, archive_extension
+from .storage import (parallel_downloads, speed_limit, Store, atomic_write, load_settings, safe_name, archive_extension,
+                      name_matcher, SkipRules, FILTER_MODES, SKIP_KNOWN, SKIP_FILTER)
 from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
@@ -99,6 +101,8 @@ class Engine:
         self.queue_request = 0
         self.queue_dirty = False
         self.limiter = DownloadLimiter(self.settings.get('speed_limit'))
+        # Global skip rules of the running download pass; None while idle.
+        self.rules = None
 
     def save_settings(self):
         atomic_write(self.settings_path, json.dumps(self.settings, indent=2).encode('utf-8'))
@@ -180,7 +184,7 @@ class Engine:
         async with self.control:
             if command == 'queue_view':
                 mode = args.get('mode', 'unfinished')
-                if mode not in {'unfinished', 'downloaded', 'all'}:
+                if mode not in {'unfinished', 'downloaded', 'skipped', 'all'}:
                     raise ValueError('Unknown queue filter')
                 self.queue_mode = mode
                 self.queue_page = max(0, int(args.get('page', 0)))
@@ -212,20 +216,57 @@ class Engine:
                 if self.account:
                     self.launch('refreshing', self.refresh)
             elif command == 'select':
-                # Switching chats serializes cancellation and saves the old file first.
-                await self.cancel()
+                chat = await self.select_chat(args['chat'])
+                if self.store.legacy_name_jobs(self.account, chat) or self.store.filename_moves(self.account, chat):
+                    self.launch('renaming', self.restore_filenames)
+            elif command == 'hunt':
                 chat = int(args['chat'])
                 if chat not in self.dialogs:
                     raise ValueError('Chat not accessible')
-                self.chat = chat
-                self.queue_page = 0
-                self.settings.setdefault('selected_chats', {})[str(self.account)] = chat
+                if not self.settings.get('download_dir'):
+                    raise TransferError('Choose a download folder first.')
+                if chat == self.chat and self.task and not self.task.done():
+                    self.emit('log', 'This chat already has an operation running. Stop it to hunt again.')
+                    return
+                if chat != self.chat:
+                    await self.select_chat(chat)
+                self.launch('scanning', self.hunt)
+            elif command == 'pin':
+                if not self.account:
+                    return
+                chat = int(args['chat'])
+                pinned = self.settings.setdefault('pinned_chats', {}).setdefault(str(self.account), [])
+                if args.get('pinned', True) and chat not in pinned:
+                    pinned.append(chat)
+                elif not args.get('pinned', True) and chat in pinned:
+                    pinned.remove(chat)
                 self.save_settings()
-                self.emit('selected', chat)
-                self.emit('current', None)
-                self.snapshot()
-                if self.store.legacy_name_jobs(self.account, chat) or self.store.filename_moves(self.account, chat):
-                    self.launch('renaming', self.restore_filenames)
+                self.emit('settings', self.settings)
+            elif command == 'hunting':
+                values = {}
+                for key in ('name_filter_enabled', 'skip_known', 'folder_per_chat'):
+                    if key in args:
+                        values[key] = bool(args[key])
+                if 'name_filter_mode' in args:
+                    if args['name_filter_mode'] not in FILTER_MODES:
+                        raise ValueError('Unknown name filter mode')
+                    values['name_filter_mode'] = args['name_filter_mode']
+                if 'name_filter' in args:
+                    values['name_filter'] = str(args['name_filter'])[:1000]
+                try:
+                    name_matcher(dict(self.settings, **values))
+                except ValueError as exc:
+                    raise TransferError(str(exc)) from None
+                self.settings.update(values)
+                self.save_settings()
+                self.emit('settings', self.settings)
+                if self.account and self.chat and self.kind not in {'scanning', 'renaming'}:
+                    # Rules apply live: waiting files are skipped or restored at once.
+                    # Restored files before the running pass position wait for the next Start.
+                    self.rules = rules = self.build_rules(self.rules) if self.rules else None
+                    self.apply_rules(self.account, self.chat, rules)
+                    self.download_wake.set()
+                    self.snapshot()
             elif command == 'folder':
                 self.settings['download_dir'] = str(Path(args['path']).resolve())
                 self.save_settings()
@@ -495,13 +536,67 @@ class Engine:
             self.emit('state', previous_kind or 'idle')
             self.snapshot()
 
+    async def select_chat(self, chat):
+        # Switching chats serializes cancellation and saves the old file first.
+        await self.cancel()
+        chat = int(chat)
+        if chat not in self.dialogs:
+            raise ValueError('Chat not accessible')
+        self.chat = chat
+        self.queue_page = 0
+        self.settings.setdefault('selected_chats', {})[str(self.account)] = chat
+        self.save_settings()
+        self.emit('selected', chat)
+        self.emit('current', None)
+        self.snapshot()
+        return chat
+
+    def target_folder(self, account, chat):
+        """Folder for files that have no downloaded bytes yet, per the current layout setting."""
+        folder = self.settings.get('download_dir')
+        if not folder:
+            return None
+        root = Path(folder).resolve()
+        if self.settings.get('folder_per_chat', False):
+            return root / f'account_{account}' / f'chat_{chat}'
+        return root
+
+    def build_rules(self, previous=None):
+        try:
+            matcher = name_matcher(self.settings)
+        except ValueError as exc:
+            raise TransferError(str(exc)) from None
+        known = None
+        if self.settings.get('skip_known', True):
+            known = self.store.known_files()
+            if previous is not None and previous.known is not None:
+                # Keep files claimed by the running pass.
+                known[0].update(previous.known[0])
+                known[1].update(previous.known[1])
+        return SkipRules(matcher, known)
+
+    def apply_rules(self, account, chat, rules=None):
+        counts = self.store.apply_skip_rules(account, chat, rules or self.build_rules())
+        if counts:
+            self.emit('log', f'Hunting rules skip {counts[SKIP_KNOWN]:,} already downloaded and '
+                             f'{counts[SKIP_FILTER]:,} not matching the name filter. See the Skipped view.')
+        return counts
+
+    async def hunt(self):
+        """Scan new messages, then download what the global rules allow."""
+        await self.scan()
+        self.kind = 'downloading'
+        self.emit('state', 'downloading')
+        if not self.gate.is_set():
+            self.emit('state', 'paused')
+        await self.download_queue()
+
     async def scan(self):
         await self.restore_filenames()
         account, chat = self.account, self.chat
-        folder = self.settings.get('download_dir')
-        if not folder:
+        root = self.target_folder(account, chat)
+        if root is None:
             raise TransferError('Choose a download folder first.')
-        root = Path(folder).resolve() / f'account_{account}' / f'chat_{chat}'
         cursor = self.store.cursor(account, chat)
         filenames = self.store.filename_allocator()
         if not cursor:
@@ -524,6 +619,8 @@ class Engine:
                 self.snapshot()
                 last = now
         self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
+        self.apply_rules(account, chat)
+        self.snapshot()
 
     async def download_queue(self):
         await self.restore_filenames()
@@ -591,6 +688,9 @@ class Engine:
         account, chat = self.account, self.chat
         after = 0
         filenames = self.store.filename_allocator()
+        self.rules = self.build_rules()
+        self.apply_rules(account, chat, self.rules)
+        self.snapshot()
 
         active = 0
         failed = False
@@ -627,6 +727,13 @@ class Engine:
                                 exhausted = True
                                 break
                             after = job['message']
+                            reason = self.rules.reason(job)
+                            if reason:
+                                # Rules changed or a duplicate was claimed during this pass.
+                                self.store.update(account, chat, after, state='skipped', error=reason)
+                                self.queue_dirty = True
+                                continue
+                            self.rules.claim(job)
                             active += 1
                             tasks.create_task(transfer(job), name=f'Download {after}')
                     if active == 0 and (exhausted or self.finish_requested):
@@ -655,30 +762,44 @@ class Engine:
                 tasks.create_task(workers(), name='Download pool')
                 tasks.create_task(report_progress(), name='Download progress')
         finally:
+            self.rules = None
             self.store.flush_progress()
             self.emit_transfers()
 
     def prepare_filename(self, job, message, filenames):
-        if job['naming_version'] >= 2:
+        if job['naming_version'] < 2:
+            old = Path(job['path'])
+            legacy = (job['naming_version'] == 0 and
+                      old.name == f"{job['message']}_{job['document']}_{job['name']}")
+            # A completed old file may be awaiting its final database checkpoint.
+            if legacy and old.exists():
+                return
+            # Preserve names from other queue/import formats.
+            if job['naming_version'] == 0 and not legacy:
+                values = {'naming_version': 2}
+            else:
+                original = getattr(getattr(message, 'file', None), 'name', None)
+                name = safe_name(original or job['name'])
+                path = filenames.allocate(old.parent, name, previous=old)
+                old_part = old.with_name(old.name + '.part')
+                # Persist the old temporary location with the new final path in ONE
+                # transaction. No move is needed, even if the process exits here.
+                partial = str(old_part) if legacy and old_part.exists() else ''
+                values = {'name': name, 'path': str(path), 'partial_path': partial, 'naming_version': 2}
+            self.store.update(job['account'], job['chat'], job['message'], **values)
+            job.update(values)
+        self.relocate_unstarted(job, filenames)
+
+    def relocate_unstarted(self, job, filenames):
+        # Files without downloaded bytes follow the current folder settings;
+        # partial and completed files always stay where their data is.
+        folder = self.target_folder(job['account'], job['chat'])
+        path = Path(job['path'])
+        part = Path(job['partial_path']) if job.get('partial_path') else path.with_name(path.name + '.part')
+        if (folder is None or job['done'] or os.path.lexists(part) or os.path.lexists(path)
+                or path.parent.resolve() == folder):
             return
-        old = Path(job['path'])
-        legacy = (job['naming_version'] == 0 and
-                  old.name == f"{job['message']}_{job['document']}_{job['name']}")
-        # A completed old file may be awaiting its final database checkpoint.
-        if legacy and old.exists():
-            return
-        # Preserve paths from other queue/import formats.
-        if job['naming_version'] == 0 and not legacy:
-            values = {'naming_version': 2}
-        else:
-            original = getattr(getattr(message, 'file', None), 'name', None)
-            name = safe_name(original or job['name'])
-            path = filenames.allocate(old.parent, name, previous=old)
-            old_part = old.with_name(old.name + '.part')
-            # Persist the old temporary location with the new final path in ONE
-            # transaction. No move is needed, even if the process exits here.
-            partial = str(old_part) if legacy and old_part.exists() else ''
-            values = {'name': name, 'path': str(path), 'partial_path': partial, 'naming_version': 2}
+        values = {'path': str(filenames.allocate(folder, job['name'], previous=path)), 'partial_path': ''}
         self.store.update(job['account'], job['chat'], job['message'], **values)
         job.update(values)
 

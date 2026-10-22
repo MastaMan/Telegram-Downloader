@@ -21,6 +21,16 @@ Follow [Release procedure](RELEASING.md) and the repository's [agent instruction
 | `tgzip/security.py` | Windows DPAPI vault and read-only legacy-session import |
 | `tests/` | Core, async orchestration, security and offscreen GUI tests |
 
+## Hunting rules and pinned chats
+
+Hunting settings are global keys in `settings.json`: `name_filter_enabled` (default true), `name_filter_mode` (`regex` or `text`), `name_filter` (default `DEFAULT_NAME_FILTER`), `skip_known` (default true), `folder_per_chat` (default false), and `pinned_chats` keyed by account ID. Missing keys mean defaults, so existing settings files need no migration. The `hunting` command validates the whole candidate settings before saving; an invalid regex is rejected with a user-facing error.
+
+Scanning still records every ZIP/RAR archive. `SkipRules` decides what downloads: `Store.known_files` returns case-folded names and document IDs of `done` rows in every chat, excluding quarantined files. `Store.apply_skip_rules` moves waiting jobs between `queued`/`error` and the additive `skipped` state in one transaction, writing the reason to `error`. It runs at the start of each download pass, after each scan, and immediately when a hunting setting changes (except during scanning or filename restoration, which apply rules on completion). The scheduler checks the rules again at claim time and adds each claimed file to the known set, so duplicates in one pass download once and live rule changes affect waiting files. `next_job` and the Unfinished view exclude `skipped`; older versions treat it as unfinished and would download those files after a rollback.
+
+The `hunt` command selects a chat through the normal cancellation path and launches one operation: `scan`, then `download_queue` under the `downloading` kind. Clicking a running chat again is ignored.
+
+`target_folder` returns the base folder or the per-chat subfolder. Scan allocates new paths there. `relocate_unstarted` runs after filename preparation and moves a job's planned destination to the current folder only when it has no recorded bytes and neither the target nor its partial file exists. Partial and completed files never move.
+
 ## Concurrency and persistence
 
 `finish_current` sets an operation-scoped flag without yielding on the worker event loop. The scheduler checks it before claiming any new job and wakes immediately when the command arrives. Already claimed transfers continue normally, then the existing verifier drains pending checks. The command does not open the pause gate or cancel tasks. Operation cleanup and each new launch reset the flag; immediate Stop, chat switching, and close still cancel the task tree. The UI remembers the underlying operation while paused so this control is unavailable during scans or manual checks.

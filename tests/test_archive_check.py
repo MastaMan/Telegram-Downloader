@@ -116,6 +116,7 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.events = []
         self.engine = Engine(self.root, lambda name, value: self.events.append((name, value)))
         self.engine.account, self.engine.chat = 1, -10
+        self.engine.settings.update(name_filter_enabled=False, skip_known=False)
         self.source = self.root / 'sample.rar'
         self.source.write_bytes(b'fixture archive bytes')
         self.engine.store.scanned(1, -10, 9, {'document': 3, 'name': self.source.name,
