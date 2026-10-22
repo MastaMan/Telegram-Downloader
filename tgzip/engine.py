@@ -17,6 +17,10 @@ from .filename_restore import legacy_source, fingerprint, rename_completed, rest
 from .queue_backup import backup_before_update
 from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 
+# Server-requested waits, including FLOOD_PREMIUM_WAIT download throttling of
+# non-Premium accounts. They are instructions to pause, not transfer failures.
+FLOOD_WAITS = (errors.FloodWaitError, errors.FloodPremiumWaitError)
+
 
 def error_text(exc):
     # Do not echo RPC request objects, credentials, QR tokens or arbitrary exception text.
@@ -28,7 +32,7 @@ def error_text(exc):
         return 'Incorrect two-step verification password. Try again.'
     if isinstance(exc, errors.ApiIdInvalidError):
         return 'Telegram rejected the API ID / API Hash. Check your credentials.'
-    if isinstance(exc, errors.FloodWaitError):
+    if isinstance(exc, FLOOD_WAITS):
         return f'Telegram requires a {exc.seconds}-second wait. Try again later.'
     if isinstance(exc, (OSError, ConnectionError, asyncio.TimeoutError)):
         return f'Network or local file operation failed ({type(exc).__name__}, code {getattr(exc, "errno", "n/a")}). Check connection, disk space and folder permissions.'
@@ -454,9 +458,9 @@ class Engine:
                         messages = await self.client.get_messages(
                             self.dialogs[chat].input_entity, ids=[job['message'] for job, _, _ in batch])
                         break
-                    except errors.FloodWaitError as exc:
+                    except FLOOD_WAITS as exc:
                         self.emit('log', f'Filename restoration: Telegram requested a {exc.seconds}-second wait.')
-                        await asyncio.sleep(exc.seconds)
+                        await asyncio.sleep(max(exc.seconds, 1))
                 messages = {message.id: message for message in messages if message is not None}
                 for index, (job, source, identity) in enumerate(batch, 1):
                     await self.gate.wait()
@@ -698,7 +702,8 @@ class Engine:
             self.emit('progress', {'done': done, 'size': job['size'], 'speed': speed,
                                    'message': job['message']})
         try:
-            for attempt in range(4):
+            retries = 0
+            while True:
                 try:
                     await self.gate.wait()
                     # Fresh message refreshes expired file references on every retry/resume.
@@ -711,18 +716,20 @@ class Engine:
                     self.transfers[after].update(name=job['name'], path=job['path'])
                     await download(self.client, message, job, self.gate, progress, limiter=self.limiter)
                     break
-                except errors.FloodWaitError as exc:
-                    self.emit('log', f'Telegram rate limit: waiting {exc.seconds} seconds. Stop remains available.')
+                except FLOOD_WAITS as exc:
+                    # Honoring a requested wait never consumes a connection retry,
+                    # so many parallel files cannot fail on short rate limits.
+                    kind = 'non-Premium download limit' if isinstance(exc, errors.FloodPremiumWaitError) else 'rate limit'
+                    self.emit('log', f'Telegram {kind}: waiting {exc.seconds} seconds. Stop remains available.')
                     progress(self.transfers[after]['done'], 0)
-                    await asyncio.sleep(exc.seconds)
-                    if attempt == 3:
-                        raise
+                    await asyncio.sleep(max(exc.seconds, 1))
                 except (ConnectionError, asyncio.TimeoutError, errors.FileReferenceExpiredError, errors.ServerError) as exc:
-                    if attempt == 3:
+                    if retries == 3:
                         raise
-                    self.emit('log', f'Connection retry {attempt + 1}/3 ({type(exc).__name__}). Partial file saved.')
+                    retries += 1
+                    self.emit('log', f'Connection retry {retries}/3 ({type(exc).__name__}). Partial file saved.')
                     progress(self.transfers[after]['done'], 0)
-                    await asyncio.sleep(2 ** (attempt + 1))
+                    await asyncio.sleep(2 ** retries)
             self.store.update(account, chat, after, done=job['size'], state='done', error='',
                               verification='pending', verification_error='')
             downloaded = True

@@ -221,7 +221,7 @@ To remove the application, sign out first if possible, close it, then delete its
 | QR login expires | The app refreshes it automatically. Verify phone connectivity and the Devices screen. |
 | Channel missing | Confirm account ID and access in the official app, then Refresh chats. |
 | No files found | Check that attachments have `.zip` / `.rar` names, or a matching MIME type when nameless. Scan only processes messages newer than its saved checkpoint. |
-| Telegram rate limit | Activity shows the required wait. Leave it running, or Stop and try later. |
+| Telegram rate limit | Activity shows the required wait, including the non-Premium download limit. The file waits and then continues automatically; it is not marked as failed. Leave it running, or Stop and try later. |
 | Slow downloads | Check that Speed limit is Unlimited if you want maximum throughput. Speed also depends on Telegram, your connection and account limits. Use Parallel downloads to choose 1–20 simultaneous transfers. More transfers do not guarantee proportionally more speed; reduce concurrency if Telegram repeatedly asks you to wait. |
 | Disk full or permission error | Free space or restore permission for the recorded path, then Start. Existing queue entries do not change paths when the base folder changes. |
 | Unchecked | Install WinRAR, select WinRAR.exe with WinRAR…, then click Check archives. |

@@ -293,6 +293,49 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.count('message'), 2)
         self.assertEqual(self.engine.store.jobs(123, -100)[0]['state'], 'done')
 
+    async def test_server_requested_waits_never_fail_the_file(self):
+        self.engine.chat = -100
+        self.engine.store.scanned(123, -100, 10, {'document': 111, 'name': 'file.zip', 'size': 100, 'path': self.root / 'file.zip'})
+        async def get_messages(*args, **kwargs):
+            return SimpleNamespace(document=SimpleNamespace(id=111, size=100))
+        # More waits than the connection retry budget, including a zero-second request.
+        waits = [errors.FloodPremiumWaitError(request=None, capture=3), errors.FloodWaitError(request=None, capture=0)] * 3
+        async def transfer(*args, **kwargs):
+            if waits:
+                raise waits.pop(0)
+        slept = []
+        async def record(seconds, *args):
+            slept.append(seconds)
+        self.engine.client = SimpleNamespace(get_messages=get_messages)
+        with patch('tgzip.engine.download', transfer), patch('tgzip.engine.asyncio.sleep', record):
+            await self.engine.download_queue()
+        self.assertEqual([seconds for seconds in slept if seconds >= 1], [3, 1] * 3)
+        job = self.engine.store.jobs(123, -100)[0]
+        self.assertEqual((job['state'], job['error']), ('done', ''))
+        self.assertTrue(any(name == 'log' and 'non-Premium' in value for name, value in self.events))
+
+    async def test_waits_do_not_extend_connection_retry_budget(self):
+        self.engine.chat = -100
+        self.engine.store.scanned(123, -100, 10, {'document': 111, 'name': 'file.zip', 'size': 100, 'path': self.root / 'file.zip'})
+        async def get_messages(*args, **kwargs):
+            return SimpleNamespace(document=SimpleNamespace(id=111, size=100))
+        failures = [errors.FloodPremiumWaitError(request=None, capture=1), ConnectionError(),
+                    errors.FloodWaitError(request=None, capture=1)] + [ConnectionError()] * 4
+        calls = []
+        async def transfer(*args, **kwargs):
+            calls.append(failures[len(calls)])
+            raise calls[-1]
+        async def no_wait(*args):
+            pass
+        self.engine.client = SimpleNamespace(get_messages=get_messages)
+        with patch('tgzip.engine.download', transfer), patch('tgzip.engine.asyncio.sleep', no_wait):
+            await self.engine.download_queue()
+        self.assertEqual(sum(isinstance(item, ConnectionError) for item in calls), 4)
+        self.assertEqual(len(calls), 6)
+        job = self.engine.store.jobs(123, -100)[0]
+        self.assertEqual(job['state'], 'error')
+        self.assertEqual(job['error'], error_text(ConnectionError()))
+
     def queue_files(self, count, size=100):
         self.engine.chat = -100
         for number in range(1, count + 1):
@@ -838,6 +881,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_messages_do_not_echo_exception_contents(self):
         self.assertNotIn('private-token', error_text(RuntimeError('private-token')))
+        self.assertEqual(error_text(errors.FloodPremiumWaitError(request=None, capture=5)),
+                         'Telegram requires a 5-second wait. Try again later.')
 
 
 if __name__ == '__main__':

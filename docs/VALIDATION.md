@@ -1,5 +1,11 @@
 # Validation and release limits
 
+## Patch release 1.0.5: Telegram waits no longer fail downloads — 22 October 2026
+
+Telegram `FLOOD_PREMIUM_WAIT` responses (download throttling for non-Premium accounts) were not recognized because Telethon's `FloodPremiumWaitError` is not a `FloodWaitError` subclass; affected files were marked as failed immediately. Ordinary short `FLOOD_WAIT` responses also consumed the four per-file attempts, so parallel transfers could fail after a few one- to three-second waits. In a supplied queue copy, all 38 failed jobs had one of these two causes. Both waits are now honored for the requested duration without consuming connection retries; Activity labels the non-Premium limit separately, and Stop still cancels the wait. Network errors keep the existing limit of three retries. Previously failed jobs are retried by the next Start.
+
+Python **3.14.8** on macOS: **203 tests**, 195 passed and eight skipped (Windows DPAPI and seven launcher tests without a portable PowerShell). New coverage alternates premium and ordinary waits beyond the retry budget, checks that waits do not extend the connection-retry limit, and checks the error text; all three fail against the 1.0.4 engine. The environment probe and compilation passed, the documentation preview was refreshed to v1.0.5, and launcher files are unchanged. Live Telegram throttling and real Windows behavior were not exercised.
+
 ## Patch release 1.0.4: queue backups before updates — 20 October 2026
 
 The update flow now creates a standalone SQLite snapshot plus settings after an update package is ready and before requesting restart. It retains ten completed snapshots in Local AppData, verifies database integrity, flushes pending progress, and blocks installation if backup creation fails. Checks that find no update do not create a snapshot.
