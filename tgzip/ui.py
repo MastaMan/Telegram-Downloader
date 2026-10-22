@@ -1,16 +1,17 @@
 import json
+import re
 import time
 from pathlib import Path
 import qrcode
 from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF, QIntValidator
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
-from .storage import parallel_downloads, speed_limit, SPEED_LIMITS, QUEUE_PAGE_SIZE
+from .storage import parallel_downloads, speed_limit, SPEED_LIMITS, QUEUE_PAGE_SIZE, DEFAULT_NAME_FILTER
 from . import __version__
 
 STYLE = '''
@@ -33,6 +34,17 @@ QPushButton#primary:hover { background: #639bff; }
 QPushButton#primary:disabled { background: #273d60; color: #7d91af; border-color: #273d60; }
 QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 4px 6px; min-height: 20px; selection-background-color: #3868ae; }
 QLineEdit:focus, QComboBox:focus { border-color: #5996ff; }
+QLineEdit[invalid="true"] { border-color: #ff7a80; }
+QListWidget { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 2px; outline: none; }
+QListWidget::item { padding: 3px 6px; border-radius: 4px; }
+QListWidget::item:hover { background: #1f2d44; }
+QListWidget::item:selected { background: #305588; color: #ffffff; }
+QListWidget:disabled { color: #6d7b90; }
+QCheckBox { background: transparent; spacing: 6px; }
+QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #4a5d7c; border-radius: 3px; background: #0f1828; }
+QCheckBox::indicator:hover { border-color: #6a91c7; }
+QCheckBox::indicator:checked { background: #4689ff; border-color: #4689ff; }
+QCheckBox:disabled { color: #6d7b90; }
 QComboBox { padding-right: 28px; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
 QComboBox::drop-down { width: 24px; border: none; }
@@ -194,6 +206,14 @@ class ProgressDelegate(QStyledItemDelegate):
         painter.setPen(QColor('#eaf0fa'))
         painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
         painter.restore()
+
+
+def in_queue_mode(row, mode):
+    if mode == 'all':
+        return True
+    if mode == 'unfinished':
+        return row['state'] not in {'done', 'skipped'}
+    return row['state'] == {'downloaded': 'done', 'skipped': 'skipped'}[mode]
 
 
 def button(text, slot, primary=False):
@@ -364,6 +384,7 @@ class Window(QMainWindow):
         self.operation_state = 'idle'
         self.finish_requested = False
         self.folder = ''
+        self.settings_values = {}
         self.current_job = None
         self.transfers_info = None
         self.queue_rows = {}
@@ -457,8 +478,50 @@ class Window(QMainWindow):
         self.chat_box.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         source_layout.addWidget(self.chat_box)
         self.chat_box.setToolTip('Your last selection is remembered. Switch chats at any time.')
+        chat_actions = QHBoxLayout()
+        self.pin_btn = button('Pin', self.toggle_pin)
+        self.pin_btn.setToolTip('Pin or unpin the selected chat in the hunting list.')
+        chat_actions.addWidget(self.pin_btn)
         self.refresh_btn = button('Refresh chats', lambda: self.send('refresh'))
-        source_layout.addWidget(self.refresh_btn)
+        chat_actions.addWidget(self.refresh_btn, 1)
+        source_layout.addLayout(chat_actions)
+        source_layout.addWidget(label('Pinned · click to hunt', 'muted'))
+        self.pinned_list = QListWidget()
+        # About four rows; longer lists scroll.
+        self.pinned_list.setFixedHeight(112)
+        self.pinned_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pinned_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.pinned_list.setToolTip('Click a pinned chat to scan its new messages and download archives allowed by Hunting rules.')
+        self.pinned_list.itemClicked.connect(self.hunt_item)
+        source_layout.addWidget(self.pinned_list)
+        hunt_card, hunt_layout = card()
+        hunt_layout.addWidget(label('Hunting', 'section'))
+        filter_row = QHBoxLayout()
+        self.filter_check = QCheckBox('Name filter')
+        self.filter_check.setToolTip('Download only archives whose filename matches. Applies to all chats.')
+        self.filter_check.toggled.connect(self.save_hunting)
+        filter_row.addWidget(self.filter_check, 1)
+        self.filter_mode = ArrowComboBox()
+        self.filter_mode.addItem('Regex', 'regex')
+        self.filter_mode.addItem('Text', 'text')
+        self.filter_mode.setToolTip('Regex: Python regular expression, case sensitive. Text: part of the filename, any case.')
+        self.filter_mode.currentIndexChanged.connect(self.save_hunting)
+        filter_row.addWidget(self.filter_mode)
+        hunt_layout.addLayout(filter_row)
+        pattern_row = QHBoxLayout()
+        self.filter_edit = QLineEdit(DEFAULT_NAME_FILTER)
+        self.filter_edit.setPlaceholderText('Filename pattern')
+        self.filter_edit.textChanged.connect(self.validate_filter)
+        self.filter_edit.editingFinished.connect(self.save_hunting)
+        pattern_row.addWidget(self.filter_edit, 1)
+        self.filter_reset = button('Default', self.reset_filter)
+        self.filter_reset.setToolTip('Restore the default pattern: ' + DEFAULT_NAME_FILTER)
+        pattern_row.addWidget(self.filter_reset)
+        hunt_layout.addLayout(pattern_row)
+        self.skip_check = QCheckBox('Skip already downloaded')
+        self.skip_check.setToolTip('Skip archives whose name or Telegram file was already downloaded or marked in any chat.')
+        self.skip_check.toggled.connect(self.save_hunting)
+        hunt_layout.addWidget(self.skip_check)
         dest_card, dest_layout = card()
         dest_layout.addWidget(label('Settings', 'section'))
         dest_layout.addWidget(label('Download folder', 'muted'))
@@ -471,6 +534,11 @@ class Window(QMainWindow):
         self.open_btn.setToolTip('Open the archive folder for the selected chat.')
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
+        self.per_chat_check = QCheckBox('Folder per chat')
+        self.per_chat_check.setToolTip('Save each chat in its own subfolder. Off: all chats share the download folder. '
+                                       'Files that already have downloaded data stay where they are.')
+        self.per_chat_check.toggled.connect(lambda checked: self.send('hunting', folder_per_chat=checked))
+        dest_layout.addWidget(self.per_chat_check)
         limits = QFormLayout()
         limits.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         limits.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
@@ -507,7 +575,7 @@ class Window(QMainWindow):
         check_actions.addWidget(self.checker_btn)
         check_actions.addWidget(self.verify_btn)
         checks.addLayout(check_actions)
-        self.settings_panel = SettingsPanel([account_card, source_card, dest_card, check_card])
+        self.settings_panel = SettingsPanel([account_card, source_card, hunt_card, dest_card, check_card])
         self.sidebar_scroll = QScrollArea()
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sidebar_scroll.setWidgetResizable(True)
@@ -588,9 +656,10 @@ class Window(QMainWindow):
         self.queue_caption = ElidedLabel('No archives yet', 'muted')
         queue_heading.addWidget(self.queue_caption, 1)
         self.queue_filter = ArrowComboBox()
-        for text, mode in [('Unfinished', 'unfinished'), ('Downloaded', 'downloaded'), ('All', 'all')]:
+        for text, mode in [('Unfinished', 'unfinished'), ('Downloaded', 'downloaded'), ('Skipped', 'skipped'), ('All', 'all')]:
             self.queue_filter.addItem(text, mode)
-        self.queue_filter.setToolTip('Filter the saved queue without changing downloads. Downloaded includes unchecked and quarantined archives.')
+        self.queue_filter.setToolTip('Filter the saved queue without changing downloads. Downloaded includes unchecked and quarantined archives. '
+                                     'Skipped files are kept by Hunting rules and download again when the rules allow them.')
         self.queue_filter.currentIndexChanged.connect(lambda: self.request_queue_page(0))
         queue_heading.addWidget(self.queue_filter)
         self.activity_toggle = button('Activity', self.toggle_activity)
@@ -756,13 +825,13 @@ class Window(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, 'Choose download folder', self.folder)
         if folder:
             self.send('folder', path=folder)
-            self.log('Folder updated for newly discovered files. Existing queue paths are preserved.')
+            self.log('Folder updated. Files without downloaded data will use it; partial and completed files stay in place.')
 
     def open_folder(self):
         if not self.folder:
             return
         folder = Path(self.folder)
-        if self.account and self.selected is not None:
+        if self.settings_values.get('folder_per_chat', False) and self.account and self.selected is not None:
             folder = folder / f'account_{self.account["id"]}' / f'chat_{self.selected}'
         if not folder.is_dir():
             QMessageBox.information(self, 'Archive folder',
@@ -771,6 +840,75 @@ class Window(QMainWindow):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
             QMessageBox.warning(self, 'Cannot open folder',
                                 'Could not open the archive folder in your file manager.\n\n' + str(folder))
+
+    def pinned_ids(self):
+        if not self.account:
+            return []
+        return list(self.settings_values.get('pinned_chats', {}).get(str(self.account['id']), []))
+
+    def toggle_pin(self):
+        if self.selected is not None:
+            self.send('pin', chat=self.selected, pinned=self.selected not in self.pinned_ids())
+
+    def hunt_item(self, item):
+        chat = item.data(Qt.ItemDataRole.UserRole)
+        if chat is not None:
+            self.send('hunt', chat=chat)
+
+    def rebuild_pinned(self):
+        self.pinned_list.blockSignals(True)
+        self.pinned_list.clear()
+        for chat in self.pinned_ids():
+            index = self.chat_box.findData(chat)
+            item = QListWidgetItem(self.chat_box.itemText(index) if index >= 0 else f'Unavailable chat {chat}')
+            item.setToolTip(item.text())
+            if index >= 0:
+                item.setData(Qt.ItemDataRole.UserRole, chat)
+            else:
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.pinned_list.addItem(item)
+            if chat == self.selected:
+                item.setSelected(True)
+        if not self.pinned_list.count():
+            item = QListWidgetItem('Select a chat and click Pin')
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.pinned_list.addItem(item)
+        self.pinned_list.blockSignals(False)
+        self.pin_btn.setText('Unpin' if self.selected in self.pinned_ids() else 'Pin')
+
+    def validate_filter(self):
+        error = ''
+        if self.filter_mode.currentData() == 'regex':
+            try:
+                re.compile(self.filter_edit.text())
+            except re.error as exc:
+                error = f'Invalid regular expression: {exc}'
+        self.filter_edit.setProperty('invalid', bool(error))
+        self.filter_edit.style().unpolish(self.filter_edit)
+        self.filter_edit.style().polish(self.filter_edit)
+        self.filter_edit.setToolTip(error or 'Archives are downloaded only when their filename matches this pattern.')
+        return not error
+
+    def save_hunting(self):
+        if not self.validate_filter():
+            return
+        values = {'name_filter_enabled': self.filter_check.isChecked(),
+                  'name_filter_mode': self.filter_mode.currentData(),
+                  'name_filter': self.filter_edit.text(),
+                  'skip_known': self.skip_check.isChecked()}
+        current = {'name_filter_enabled': self.settings_values.get('name_filter_enabled', True),
+                   'name_filter_mode': self.settings_values.get('name_filter_mode', 'regex'),
+                   'name_filter': self.settings_values.get('name_filter', DEFAULT_NAME_FILTER),
+                   'skip_known': self.settings_values.get('skip_known', True)}
+        if values != current:
+            self.send('hunting', **values)
+
+    def reset_filter(self):
+        self.filter_mode.blockSignals(True)
+        self.filter_mode.setCurrentIndex(self.filter_mode.findData('regex'))
+        self.filter_mode.blockSignals(False)
+        self.filter_edit.setText(DEFAULT_NAME_FILTER)
+        self.save_hunting()
 
     def choose_checker(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Select installed WinRAR.exe', '', 'WinRAR (WinRAR.exe)')
@@ -803,13 +941,18 @@ class Window(QMainWindow):
         self.refresh_btn.setEnabled(idle and bool(self.account))
         self.chat_box.setEnabled(bool(self.account))
         self.open_btn.setEnabled(bool(self.folder))
+        self.pin_btn.setEnabled(bool(self.account) and self.selected is not None)
+        self.pinned_list.setEnabled(bool(self.account) and self.state not in {'updating', 'authorizing'})
+        for widget in (self.filter_check, self.filter_mode, self.filter_edit, self.filter_reset, self.skip_check, self.per_chat_check):
+            widget.setEnabled(self.state != 'updating')
 
     def update_summary(self, summary):
         self.done_value.setText(f'{summary["complete"]} / {summary["total"]}')
-        remaining = summary['total'] - summary['complete']
-        self.queue_caption.setText(f'{remaining:,} remaining · {summary["complete"]:,} downloaded · {summary["failed"]} failed')
+        skipped = summary.get('skipped', 0)
+        remaining = summary['total'] - summary['complete'] - skipped
+        self.queue_caption.setText(f'{remaining:,} remaining · {summary["complete"]:,} downloaded · {skipped:,} skipped · {summary["failed"]} failed')
         mode = self.queue_filter.currentData()
-        matching = {'all': summary['total'], 'downloaded': summary['complete'], 'unfinished': remaining}[mode]
+        matching = {'all': summary['total'], 'downloaded': summary['complete'], 'skipped': skipped, 'unfinished': remaining}[mode]
         start = self.queue_page * QUEUE_PAGE_SIZE + 1 if self.table.rowCount() else 0
         end = start + self.table.rowCount() - 1 if start else 0
         scope = 'files' if mode == 'all' else mode
@@ -904,7 +1047,7 @@ class Window(QMainWindow):
         if self.demo_summary is None:
             return
         mode = self.queue_filter.currentData()
-        rows = [row for row in self.demo_rows if mode == 'all' or (row['state'] == 'done') == (mode == 'downloaded')]
+        rows = [row for row in self.demo_rows if in_queue_mode(row, mode)]
         def priority(row):
             return (0 if row['state'] == 'downloading' else
                     1 if row['state'] == 'done' and row.get('verification') == 'checking' else
@@ -1006,6 +1149,21 @@ class Window(QMainWindow):
             self.folder = value.get('download_dir', '')
             self.folder_label.setText(Path(self.folder).name if self.folder else 'Choose a download folder')
             self.folder_label.setToolTip(self.folder)
+            self.settings_values = dict(value)
+            controls = (self.filter_check, self.filter_mode, self.filter_edit, self.skip_check, self.per_chat_check)
+            for widget in controls:
+                widget.blockSignals(True)
+            self.filter_check.setChecked(value.get('name_filter_enabled', True))
+            self.filter_mode.setCurrentIndex(max(0, self.filter_mode.findData(value.get('name_filter_mode', 'regex'))))
+            if not self.filter_edit.hasFocus():
+                self.filter_edit.setText(value.get('name_filter', DEFAULT_NAME_FILTER))
+                self.filter_edit.setCursorPosition(0)
+            self.skip_check.setChecked(value.get('skip_known', True))
+            self.per_chat_check.setChecked(value.get('folder_per_chat', False))
+            for widget in controls:
+                widget.blockSignals(False)
+            self.validate_filter()
+            self.rebuild_pinned()
         elif name == 'account':
             if (self.account or {}).get('id') != (value or {}).get('id'):
                 self.reset_archive()
@@ -1013,6 +1171,7 @@ class Window(QMainWindow):
             self.account_name.setText(value['name'] if value else 'Connect Telegram')
             self.account_detail.setText(f'ID: {value["id"]}' if value else 'Sign in securely with a QR code.')
             self.badge.setText('CONNECTED' if value else 'NOT CONNECTED')
+            self.rebuild_pinned()
         elif name == 'dialogs':
             self.selected = None
             self.chat_box.blockSignals(True)
@@ -1022,6 +1181,7 @@ class Window(QMainWindow):
                 self.chat_box.setItemData(self.chat_box.count() - 1, str(row['id']), Qt.ItemDataRole.ToolTipRole)
             self.chat_box.setCurrentIndex(-1)
             self.chat_box.blockSignals(False)
+            self.rebuild_pinned()
         elif name == 'selected':
             if self.selected != value:
                 self.reset_archive()
@@ -1031,6 +1191,7 @@ class Window(QMainWindow):
             self.chat_box.lineEdit().setCursorPosition(0)
             self.chat_box.blockSignals(False)
             self.chat_box.setToolTip(self.chat_box.currentText())
+            self.rebuild_pinned()
         elif name == 'current':
             if value and self.transfers_info is not None and self.state == 'downloading':
                 return
@@ -1079,7 +1240,7 @@ class Window(QMainWindow):
             self.queue_pages = value.get('pages', 1)
             self.update_pager(force=self.queue_page != old_page)
             mode = self.queue_filter.currentData()
-            rows = [row for row in value['rows'] if mode == 'all' or (row['state'] == 'done') == (mode == 'downloaded')]
+            rows = [row for row in value['rows'] if in_queue_mode(row, mode)]
             selected_item = self.table.item(self.table.currentRow(), 0) if self.table.currentRow() >= 0 else None
             selected_message = selected_item.data(Qt.ItemDataRole.UserRole) if selected_item else None
             self.table.blockSignals(True)
@@ -1089,7 +1250,8 @@ class Window(QMainWindow):
             self.queue_jobs = {row['message']: dict(row) for row in rows}
             for index, row in enumerate(rows):
                 self.queue_rows[row['message']] = index
-                status = {'queued': 'Queued', 'downloading': 'Downloading', 'done': 'Completed', 'error': 'Failed'}.get(row['state'], row['state'])
+                status = {'queued': 'Queued', 'downloading': 'Downloading', 'done': 'Completed', 'error': 'Failed',
+                          'skipped': 'Skipped'}.get(row['state'], row['state'])
                 verification = row.get('verification', 'pending')
                 if row['state'] == 'done':
                     status = {'pending': 'Unchecked', 'checking': 'Checking…', 'ok': 'Verified', 'error': 'Check failed',
@@ -1106,7 +1268,8 @@ class Window(QMainWindow):
                         item.setData(Qt.ItemDataRole.UserRole, fraction)
                     item.setToolTip('\n'.join(filter(None, [row['error'], row.get('verification_error'), row.get('quarantine_path') or row['path']])))
                     self.table.setItem(index, col, item)
-                self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff'}.get(row['state'], '#a6b6cc')))
+                self.table.item(index, 3).setForeground(QColor({'done': '#69ddc3', 'error': '#ff9a9d', 'downloading': '#78adff',
+                                                                'skipped': '#7d8ca3'}.get(row['state'], '#a6b6cc')))
                 if row['state'] == 'done' and verification != 'ok':
                     self.table.item(index, 3).setForeground(QColor('#ff9a9d' if verification in {'error', 'quarantined'} else '#e8c77f'))
             self.table.verticalScrollBar().setValue(scroll if self.queue_page == old_page else 0)
@@ -1187,9 +1350,11 @@ class Window(QMainWindow):
     def populate_demo(self):
         self.configured = True
         self.on_event('account', {'name': 'Alex Morgan', 'id': 123456789})
-        self.on_event('dialogs', [{'id': -100123, 'name': 'Design Resources', 'kind': 'Group'}, {'id': -100456, 'name': 'Archive Library', 'kind': 'Channel'}])
+        self.on_event('dialogs', [{'id': -100123, 'name': 'Design Resources', 'kind': 'Group'}, {'id': -100456, 'name': 'Archive Library', 'kind': 'Channel'},
+                                  {'id': -100789, 'name': 'Model Exchange', 'kind': 'Group'}, {'id': -100321, 'name': 'Texture Drops', 'kind': 'Channel'}])
         self.on_event('selected', -100123)
-        self.on_event('settings', {'download_dir': 'C:/Users/Alex/Downloads/Telegram Archives'})
+        self.on_event('settings', {'download_dir': 'C:/Users/Alex/Downloads/Telegram Archives',
+                                   'pinned_chats': {'123456789': [-100123, -100789, -100321]}})
         self.on_event('checker', 'C:/Program Files/WinRAR/WinRAR.exe')
         rows = []
         for i, (name, size, done, state) in enumerate([

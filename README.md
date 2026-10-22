@@ -10,9 +10,9 @@ A standalone Windows application for downloading ZIP and RAR attachments from Te
 2. Double-click **`Start.bat`**. This is the only launch file you need. It finds a suitable Python 3.14 or downloads an official private runtime automatically, then installs the dependencies and opens the app. No manual Python installation or administrator rights are needed.
 3. Open **API settings**, enter your API ID and API Hash, then click **Save**. Get them from [Telegram API development tools](https://my.telegram.org/apps).
 4. In Telegram on your phone, open **Settings → Devices → Link Desktop Device** and scan the displayed QR code. If requested, enter your two-step verification password in the application.
-5. Choose a group or channel, choose a download folder, click **Scan archives**, then **Start**. Up to **20 archives download simultaneously** by default. Use **Parallel downloads** in the sidebar to choose 1–20; the setting is remembered. Stop the queue before changing it.
+5. Choose a group or channel, choose a download folder, click **Scan archives**, then **Start**. Or click **Pin** and then the chat in the pinned list to scan and download in one step. Up to **20 archives download simultaneously** by default. Use **Parallel downloads** in the sidebar to choose 1–20; the setting is remembered. Stop the queue before changing it.
 
-The selected chat is remembered for each account and restored next time. The chat selector stays available during scanning, downloading, and pauses. Switching chats safely stops the current operation, retains its partial files, and opens the other chat's saved queue. **Downloads never start automatically on launch or chat selection.**
+The selected chat is remembered for each account and restored next time. The chat selector stays available during scanning, downloading, and pauses. Switching chats safely stops the current operation, retains its partial files, and opens the other chat's saved queue. **Downloads never start automatically on launch or chat selection.** Only clicking a pinned chat in the hunting list starts scanning and downloading it.
 
 For a desktop shortcut, right-click `Start.bat` → **Show more options → Send to → Desktop (create shortcut)**. Keep the project folder in place. The shortcut still points to the same single launcher.
 
@@ -34,6 +34,9 @@ Intermediate download progress is batched into one database transaction about on
 - **Speed limit** dropdown: Unlimited by default, or 10 / 5 / 2 / 1 / 0.5 / 0.25 MB/s shared across all downloads. Change it live; the choice is remembered.
 - **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.
+- **Pinned chats** in a scrollable list: one click scans the chat for new messages and downloads the archives allowed by the Hunting rules.
+- **Hunting rules** for all chats: a filename filter (regex or plain text; by default `^[0-9a-z]+\.[0-9a-z]+\.(zip|rar)$` for names such as `7407604.67a7dac35b142.rar`) and skipping archives already downloaded in any chat, by name or Telegram file. Skipped archives remain visible in their own queue view.
+- All chats save into one folder by default; **Folder per chat** keeps a subfolder per chat. Archives without downloaded data follow the current setting.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
 - Original filenames are preserved, including extension case and long names. Only collisions add a removable prefix such as `__dup_2__`; Windows-invalid characters still need replacement.
 - Completed archives saved with old numbered names are restored automatically for the selected chat, including files in `wrong_archives`, using verified Telegram metadata and a recoverable rename journal.

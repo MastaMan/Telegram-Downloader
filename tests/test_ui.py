@@ -13,6 +13,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QProgressBar
 from shiboken6 import delete, isValid
 from tgzip.engine import Bridge
+from tgzip.storage import DEFAULT_NAME_FILTER
 from tgzip.ui import QRDialog, SettingsDialog, Window
 
 
@@ -45,7 +46,18 @@ class UITests(unittest.TestCase):
         self.assertEqual((window.width(), window.height()), (1150, 640))
         self.assertFalse(window.panel_btn.isVisible())
         self.assertTrue(window.sidebar_scroll.isVisible())
-        self.assertEqual(window.sidebar_scroll.verticalScrollBar().maximum(), 0)
+        # The pinned hunting list is visible at startup; lower cards scroll.
+        viewport = window.sidebar_scroll.viewport()
+        position = window.pinned_list.mapTo(viewport, window.pinned_list.rect().topLeft())
+        self.assertGreaterEqual(position.y(), 0)
+        self.assertLessEqual(position.y() + window.pinned_list.height(), viewport.height())
+        self.assertEqual([window.pinned_list.item(i).text() for i in range(window.pinned_list.count())],
+                         ['Design Resources · Group', 'Model Exchange · Group', 'Texture Drops · Channel'])
+        self.assertEqual(window.pin_btn.text(), 'Unpin')
+        self.assertTrue(window.filter_check.isChecked())
+        self.assertTrue(window.skip_check.isChecked())
+        self.assertFalse(window.per_chat_check.isChecked())
+        self.assertEqual(window.sidebar_scroll.horizontalScrollBar().maximum(), 0)
         self.assertGreaterEqual(window.table.viewport().height() // window.table.rowHeight(0), 8)
         summary = window.transfers_info['summary']
         self.assertEqual(window.file_bar.value(), round(1000 * summary['received'] / summary['bytes']))
@@ -73,12 +85,21 @@ class UITests(unittest.TestCase):
             window.activity_toggle.click()
             self.app.processEvents()
             for widget in (window.table, window.active_strip, window.file_bar, window.chat_box,
-                           window.speed_box, window.verify_btn, window.finish_btn, window.stop_btn):
+                           window.pinned_list, window.finish_btn, window.stop_btn):
                 position = widget.mapTo(window, widget.rect().topLeft())
                 self.assertGreaterEqual(position.x(), 0)
                 self.assertGreaterEqual(position.y(), 0)
                 self.assertLessEqual(position.x() + widget.width(), window.width())
                 self.assertLessEqual(position.y() + widget.height(), window.height())
+            viewport = window.sidebar_scroll.viewport()
+            for widget in (window.filter_edit, window.speed_box, window.per_chat_check, window.verify_btn):
+                window.sidebar_scroll.ensureWidgetVisible(widget)
+                self.app.processEvents()
+                position = widget.mapTo(viewport, widget.rect().topLeft())
+                self.assertGreaterEqual(position.y(), 0)
+                self.assertLessEqual(position.y() + widget.height(), viewport.height())
+                self.assertLessEqual(position.x() + widget.width(), viewport.width())
+            window.sidebar_scroll.verticalScrollBar().setValue(0)
             for btn in window.findChildren(QPushButton):
                 if btn.isVisible():
                     self.assertGreaterEqual(btn.width(), btn.fontMetrics().horizontalAdvance(btn.text()) + 12,
@@ -215,6 +236,10 @@ class UITests(unittest.TestCase):
             second.mkdir()
             window.on_event('settings', {'download_dir': directory})
             with patch('tgzip.ui.QDesktopServices.openUrl', return_value=True) as open_url:
+                # By default all chats share the download folder.
+                window.open_btn.click()
+                self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), root)
+                window.on_event('settings', {'download_dir': directory, 'folder_per_chat': True})
                 window.open_btn.click()
                 self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), target)
                 window.on_event('selected', -100456)
@@ -225,10 +250,54 @@ class UITests(unittest.TestCase):
                 self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), root)
         window.close()
 
+    def test_hunting_controls_validate_pin_and_hunt(self):
+        window = Window(demo=True)
+        sent = []
+        window.send = lambda command, **kwargs: sent.append((command, kwargs))
+        window.filter_edit.setText('(broken')
+        window.save_hunting()
+        self.assertTrue(window.filter_edit.property('invalid'))
+        self.assertIn('Invalid regular expression', window.filter_edit.toolTip())
+        self.assertEqual(sent, [])
+        window.filter_mode.setCurrentIndex(window.filter_mode.findData('text'))
+        self.assertFalse(window.filter_edit.property('invalid'))
+        self.assertEqual(sent[-1], ('hunting', {'name_filter_enabled': True, 'name_filter_mode': 'text',
+                                                'name_filter': '(broken', 'skip_known': True}))
+        window.reset_filter()
+        self.assertEqual(window.filter_edit.text(), DEFAULT_NAME_FILTER)
+        self.assertEqual(window.filter_mode.currentData(), 'regex')
+        window.per_chat_check.click()
+        self.assertEqual(sent[-1], ('hunting', {'folder_per_chat': True}))
+        window.pinned_list.itemClicked.emit(window.pinned_list.item(1))
+        self.assertEqual(sent[-1], ('hunt', {'chat': -100789}))
+        window.pin_btn.click()
+        self.assertEqual(sent[-1], ('pin', {'chat': -100123, 'pinned': False}))
+        window.on_event('selected', -100456)
+        self.assertEqual(window.pin_btn.text(), 'Pin')
+        self.assertFalse(window.pinned_list.item(0).isSelected())
+        window.close()
+
+    def test_skipped_rows_have_their_own_queue_filter(self):
+        window = Window(demo=True)
+        rows = [{'message': 1, 'name': 'Readable.rar', 'size': 100, 'done': 0, 'state': 'skipped', 'path': 'Readable.rar',
+                 'error': 'Skipped: the filename does not match the name filter.', 'verification': 'pending'},
+                {'message': 2, 'name': '1.a.rar', 'size': 100, 'done': 0, 'state': 'queued', 'path': '1.a.rar',
+                 'error': '', 'verification': 'pending'}]
+        window.demo_rows = rows
+        window.demo_summary = {'total': 2, 'bytes': 200, 'received': 0, 'complete': 0, 'failed': 0, 'skipped': 1}
+        window.request_queue_page(0)
+        self.assertEqual([window.table.item(i, 0).text() for i in range(window.table.rowCount())], ['1.a.rar'])
+        self.assertIn('1 remaining', window.queue_caption.text())
+        self.assertIn('1 skipped', window.queue_caption.text())
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('skipped'))
+        self.assertEqual(window.table.item(0, 3).text(), 'Skipped')
+        self.assertIn('name filter', window.table.item(0, 3).toolTip())
+        window.close()
+
     def test_open_missing_archive_directory_does_not_open_root_instead(self):
         window = Window(demo=True)
         with tempfile.TemporaryDirectory() as directory:
-            window.on_event('settings', {'download_dir': directory})
+            window.on_event('settings', {'download_dir': directory, 'folder_per_chat': True})
             with patch('tgzip.ui.QDesktopServices.openUrl') as open_url, \
                  patch('tgzip.ui.QMessageBox.information') as message:
                 window.open_btn.click()
