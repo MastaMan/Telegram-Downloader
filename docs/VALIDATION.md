@@ -1,5 +1,16 @@
 # Validation and release limits
 
+## Patch release 1.0.9: compact interface, clean launch, ZIP backups, and integrity statuses — 23 October 2026
+
+- **Compact, foldable interface.** Smaller type and paddings (controls about 24 px, 22 px queue rows), the account ID on the name row, the Settings card split into Download folder and Downloads, and settings-like cards (Hunting, Download folder, Downloads, Archive checks, Queue database) folded by default with one-line summaries. Buttons are colour-coded by purpose, checkboxes draw a real check mark, and Archive checks shows a clear WinRAR found / not found badge. The window reopens at its last geometry with the same folded cards (`window.ini` in the data folder).
+- **Clean launch.** `Start.bat` closes leftover copies of this app and processes of the earlier downloader scripts before starting, except its own ancestors, dependency installation, pending updates and `--demo`, and logs each stop.
+- **ZIP backups.** Backup writes `backups/manual-<time>-<id>.zip` (integrity-checked queue plus settings, verified archive), keeping ten.
+- **Integrity statuses.** WinRAR's test already checks every member's CRC; the queue now labels Intact, Damaged, or Password, and confirmed failures move to `wrong_archives/damaged` or `wrong_archives/password`.
+
+Python **3.14.8** on macOS with portable PowerShell **7.6.7**: **238 tests**, 237 passed and one skipped (Windows DPAPI). New coverage: compact startup with folded cards, summaries and button roles; the drawn check mark; geometry and folded-card persistence (and that demo windows never write it); leftover-process selection with protected launcher ancestors, pip and pending-update guards; ZIP backup contents, verification and retention; damaged/password classification and folders; queue labels for old and new quarantined rows. Launcher tests fail against the 1.0.8 `Start.bat`. Compilation, the environment probe and whitespace checks passed. Offscreen previews were inspected at 1150×640 folded and expanded, 500×340, and the Settings window at 480×600 and 760×600; documentation previews were refreshed to v1.0.9.
+
+Real Windows rendering and process termination with Windows PowerShell 5.1, an actual WinRAR run, and restoring geometry on multi-monitor setups were not exercised.
+
 ## Patch release 1.0.8: Telegram File Hunter and import of files from the earlier scripts — 23 October 2026
 
 The application is renamed **Telegram File Hunter** (header, window title, logo, compact title, setup window, launcher messages, and the device name shown in Telegram). The application data folder, package name, repository, and update channel are unchanged, so settings, the queue, and the encrypted sign-in carry over.
