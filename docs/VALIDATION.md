@@ -1,5 +1,15 @@
 # Validation and release limits
 
+## Patch release 1.0.8: Telegram File Hunter and import of files from the earlier scripts — 23 October 2026
+
+The application is renamed **Telegram File Hunter** (header, window title, logo, compact title, setup window, launcher messages, and the device name shown in Telegram). The application data folder, package name, repository, and update channel are unchanged, so settings, the queue, and the encrypted sign-in carry over.
+
+Archives saved by the scripts used before this app (`group_<id>` folders, names such as `3800029.619b0e4d1b26c__msg89.zip`) were not known to the queue and would have been downloaded again. **Import old files…** removes the `__msg<id>` suffix, moves these archives into the download folder without overwriting, records their original names so Skip already downloaded never downloads them again, removes emptied `group_` folders, and writes a TSV journal of every move. The app itself never produced these names; their timestamps predate its first commit.
+
+Python **3.14.8** on macOS: **230 tests**, 222 passed and eight skipped (Windows DPAPI and seven launcher tests without a portable PowerShell). New coverage: suffix recognition limited to the old pattern; candidate selection that leaves `.part` files, `wrong_archives`, queue-tracked files and unrelated archives alone; never-overwrite behavior for same-size duplicates (left in place), different files (`__dup_2__`), and files already in place; a full import that moves, journals, removes the empty group folder, marks matching queue entries Skipped, and finds nothing on a second run; required folders; and the confirmation before the UI sends the command. Compilation, the environment probe and whitespace checks passed. The window title, header, and compact title were checked for the new name. Offscreen previews were inspected at 1150×640 (top and scrolled) and 500×340; documentation previews were refreshed to v1.0.8.
+
+Real Windows renames, cross-drive moves, and the owner's actual old folders were not exercised.
+
 ## Patch release 1.0.7: Hunt all, faster scans, and a movable queue database — 23 October 2026
 
 **Hunt all** scans and downloads every accessible pinned chat in pin order within one operation, reports progress in the footer, continues after a failing chat, and stops after the active chat on Finish current. Scans now request document messages only (`InputMessagesFilterDocument`) and wait out FloodWait/FloodPremiumWait, resuming from the stored checkpoint instead of failing. The queue database can be copied to or opened from another local or synced folder (Use existing / Replace, keeping replaced files and their WAL), network folders are refused, and an unavailable folder blocks queue operations instead of falling back to a stale queue. **Backup** saves integrity-checked snapshots of the queue and settings beside the queue database, keeping ten; update backups now copy the queue actually in use.
