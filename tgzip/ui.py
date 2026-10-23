@@ -582,7 +582,8 @@ class Window(QMainWindow):
         self.checker_btn = button('WinRAR…', self.choose_checker)
         self.checker_btn.setToolTip('Select the installed WinRAR.exe for automatic archive checks.')
         self.verify_btn = button('Check archives', lambda: self.send('verify'))
-        self.verify_btn.setToolTip('Test downloaded files in this chat without a password. Confirmed failures move to wrong_archives.')
+        self.verify_btn.setToolTip('Test the integrity of downloaded files in this chat. Damaged archives move to wrong_archives\\damaged, '
+                                   'password-protected ones to wrong_archives\\password.')
         check_actions.addWidget(self.checker_btn)
         check_actions.addWidget(self.verify_btn)
         checks.addLayout(check_actions)
@@ -594,7 +595,7 @@ class Window(QMainWindow):
         self.database_btn = button('Change…', self.change_database)
         self.database_btn.setToolTip('Keep the queue database in another folder, for example Dropbox. Stop operations first.')
         self.backup_btn = button('Backup', lambda: self.send('backup'))
-        self.backup_btn.setToolTip('Save a checked copy of the queue and settings to the backups folder next to the queue database.')
+        self.backup_btn.setToolTip('Save a checked ZIP of the queue and settings to the backups folder next to the queue database.')
         database_actions.addWidget(self.database_btn)
         database_actions.addWidget(self.backup_btn)
         database_layout.addLayout(database_actions)
@@ -1021,7 +1022,7 @@ class Window(QMainWindow):
         start = self.queue_page * QUEUE_PAGE_SIZE + 1 if self.table.rowCount() else 0
         end = start + self.table.rowCount() - 1 if start else 0
         scope = 'files' if mode == 'all' else mode
-        self.total_label.setText(f'{start:,}–{end:,} of {matching:,} {scope} · {summary.get("verified", 0)} verified · {summary.get("unchecked", 0)} unchecked · {summary.get("quarantined", 0)} quarantined · {summary.get("check_failed", 0)} check errors')
+        self.total_label.setText(f'{start:,}–{end:,} of {matching:,} {scope} · {summary.get("verified", 0)} intact · {summary.get("unchecked", 0)} unchecked · {summary.get("quarantined", 0)} in wrong_archives · {summary.get("check_failed", 0)} check errors')
         if self.state in {'idle', 'scanning'}:
             # The single aggregate bar also represents a restored or stopped queue.
             # Active operations such as filename restoration own it until they finish.
@@ -1339,8 +1340,10 @@ class Window(QMainWindow):
                           'skipped': 'Skipped'}.get(row['state'], row['state'])
                 verification = row.get('verification', 'pending')
                 if row['state'] == 'done':
-                    status = {'pending': 'Unchecked', 'checking': 'Checking…', 'ok': 'Verified', 'error': 'Check failed',
-                              'quarantining': 'Moving…', 'quarantined': 'Quarantined'}.get(verification, 'Unchecked')
+                    status = {'pending': 'Unchecked', 'checking': 'Checking…', 'ok': 'Intact', 'error': 'Check failed',
+                              'quarantining': 'Moving…', 'quarantined': 'Damaged'}.get(verification, 'Unchecked')
+                    if verification == 'quarantined' and 'password' in (row.get('verification_error') or '').lower():
+                        status = 'Password'
                 if row['state'] == 'downloading' and self.state == 'paused':
                     status = 'Paused'
                 fraction = row['done'] / max(row['size'], 1)
@@ -1466,7 +1469,7 @@ class Window(QMainWindow):
         self.on_event('progress', {'done': rows[2]['done'], 'size': rows[2]['size'], 'speed': 18.6 * 1024**2, 'message': 3, 'summary': summary})
         self.on_event('transfers', {'active': 4, 'speed': 18.6 * 1024**2, 'summary': summary,
                                    'files': [row for row in rows if row['state'] == 'downloading']})
-        self.on_event('verification', {'name': rows[1]['name'], 'detail': 'Checking archive without a password: attempt 2/3…'})
+        self.on_event('verification', {'name': rows[1]['name'], 'detail': 'Checking archive integrity: attempt 2/3…'})
         self.log('Preview mode — sample data. No Telegram connection.')
         self.log('Last selected chat restored: Design Resources.')
         self.log('Checking Architectural materials pack.zip in the background. Downloads continue.')

@@ -331,6 +331,23 @@ class UITests(unittest.TestCase):
         self.assertFalse(window.import_btn.isEnabled())
         window.close()
 
+    def test_quarantined_rows_show_damaged_or_password(self):
+        window = Window(demo=True)
+        base = {'size': 100, 'done': 100, 'state': 'done', 'path': 'x.rar'}
+        rows = [dict(base, message=1, name='broken.rar', verification='quarantined', error='',
+                     verification_error='Damaged archive: CRC or structure errors; confirmed by 3 checks.'),
+                dict(base, message=2, name='locked.rar', verification='quarantined', error='',
+                     verification_error='Password-protected archive: its contents cannot be tested without the password.'),
+                dict(base, message=3, name='old.rar', verification='quarantined', error='',
+                     verification_error='Password required or incorrect; confirmed by 3 checks.'),
+                dict(base, message=4, name='good.rar', verification='ok', error='', verification_error='')]
+        window.demo_rows = rows
+        window.demo_summary = {'total': 4, 'bytes': 400, 'received': 400, 'complete': 4, 'failed': 0, 'skipped': 0}
+        window.queue_filter.setCurrentIndex(window.queue_filter.findData('downloaded'))
+        statuses = {window.table.item(i, 0).text(): window.table.item(i, 3).text() for i in range(window.table.rowCount())}
+        self.assertEqual(statuses, {'broken.rar': 'Damaged', 'locked.rar': 'Password', 'old.rar': 'Password', 'good.rar': 'Intact'})
+        window.close()
+
     def test_skipped_rows_have_their_own_queue_filter(self):
         window = Window(demo=True)
         rows = [{'message': 1, 'name': 'Readable.rar', 'size': 100, 'done': 0, 'state': 'skipped', 'path': 'Readable.rar',
@@ -568,7 +585,7 @@ class UITests(unittest.TestCase):
     def test_verification_states_are_distinct_from_download_progress(self):
         window = Window(demo=True)
         window.queue_filter.setCurrentIndex(window.queue_filter.findData('downloaded'))
-        self.assertEqual(window.table.item(window.queue_rows[1], 3).text(), 'Verified')
+        self.assertEqual(window.table.item(window.queue_rows[1], 3).text(), 'Intact')
         self.assertEqual(window.table.item(window.queue_rows[2], 3).text(), 'Checking…')
         window.on_event('state', 'idle')
         self.assertTrue(window.verify_btn.isEnabled())

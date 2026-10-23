@@ -15,6 +15,13 @@ The application version appears beside **Telegram File Hunter** in the top heade
 
 Extract **all files** into a writable directory, such as `C:\TelegramDownloader`. Avoid very long paths. Double-click **Start.bat** every time you want to open the app.
 
+**Start.bat always starts a clean copy.** Before launching, it closes leftovers that could keep writing files or creating folders:
+
+- any running copy of this app (Python processes started from this folder or with `-m tgzip`), including a hidden or frozen one;
+- the earlier downloader scripts: Python processes whose `.py` file sits next to their `telegram_config.json` or `telegram_zip_session.session`.
+
+Each closed process is reported in the launch window and in `setup.log`. A running copy is closed immediately, without its normal shutdown: partial `.part` files and the queue stay safe and resume on Start, but the last second of progress display may be recounted. Other Python programs are not touched. Nothing is closed while **Check updates** is installing an update (it restarts the app itself), while dependencies are being installed, or when you run `Start.bat --demo`. A script launched with a relative path from another folder cannot be identified; close it yourself if needed.
+
 The launcher looks for standard 64-bit Python 3.14 with Tcl/Tk, venv, and ensurepip. It checks the existing application environment, private runtime, Windows Python launcher, and PATH. If none is suitable, it downloads the official full Python 3.14.8 x64 ZIP from python.org, verifies its pinned SHA-256, and prepares it under `%LOCALAPPDATA%\TelegramZipDesktop\runtime`. No administrator access, system Python replacement, or PATH change is needed. The first download shows progress in the launch window.
 
 The application dependencies, including cryptg, are installed into `.venv-py314` inside the project. On an update from an older environment, this happens automatically. The old `.venv` is kept. Account credentials, selected chat, queue, downloads, and partial files stay where they are. The same runtime preparation runs after **Check updates**, even if the old app used Python 3.15.
@@ -82,7 +89,8 @@ Files are organized as:
     Chair Model.ZIP
     Living Room.rar
     __dup_2__Chair Model.ZIP    (only if that name is already taken)
-    wrong_archives\    (files that failed three archive checks)
+    wrong_archives\damaged\    (archives that failed three integrity checks)
+    wrong_archives\password\   (archives that need a password)
 ```
 
 Original filenames are preserved, including spaces, Unicode, and `.ZIP` / `.RAR` capitalization. No message/document numbers are added and long names are not silently shortened. Windows-invalid characters are replaced and reserved device names receive an underscore. A nameless attachment uses `archive_<message ID>.zip` or `.rar`. Names that exceed the filesystem's limits are reported as errors. Keep the chosen folder path short enough for Windows path limits; `C:\TelegramFiles` is a good example.
@@ -154,9 +162,10 @@ The interface shows:
 | Files downloaded | Full byte count received divided by all discovered files; includes quarantined files |
 | Green queue bar | Received bytes across the queue; a failed partial file can still contribute bytes |
 | Unchecked | Download complete; no successful WinRAR test yet |
-| Checking… | WinRAR is testing the archive without a password |
-| Verified | WinRAR returned success |
-| Quarantined | Three confirmed failures; file moved to `wrong_archives` |
+| Checking… | WinRAR is testing the archive's integrity without a password |
+| Intact | Every file in the archive passed WinRAR's CRC test |
+| Damaged | Three checks confirmed CRC or structure errors; file moved to `wrong_archives\damaged` |
+| Password | Three checks confirmed a password is required; file moved to `wrong_archives\password` |
 | Check failed | Could not reliably test or move the file; hover for details |
 | Failed | Hover over the row and check Activity for the reason |
 | Skipped | Excluded by a Hunting rule; hover for the reason. Not downloaded unless the rules change |
@@ -184,15 +193,15 @@ Every new complete download immediately joins a durable background check queue w
 
 The small indicator beside **WinRAR…** shows the active check and attempt number; hover over it for the checked filename. The main download card continues showing combined speed and overall progress; individual file progress remains in the queue.
 
-**Start** resumes pending checks after Stop or restart, even if there are no new downloads. Files already Verified, Quarantined, or Check failed are not automatically rechecked. Use Check archives to retry failed checks or recheck completed files. Checks start only on Start or Check archives, not automatically when opening the app. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
+**Start** resumes pending checks after Stop or restart, even if there are no new downloads. Files already Intact, Damaged, Password, or Check failed are not automatically rechecked. Use Check archives to retry failed checks or recheck completed files. Checks start only on Start or Check archives, not automatically when opening the app. **Check archives** tests all non-quarantined completed files in the selected chat's saved queue, including files downloaded by earlier app versions. It does not scan unrelated files on disk or the old scripts' untracked downloads. Without WinRAR, downloads remain **Unchecked** and nothing is moved.
 
-The policy follows the supplied BAT: run `WinRAR.exe t -p- -ibck -inul <archive>`, with up to three attempts and a three-second delay between attempts. Any success stops retrying. Only three results from codes **2** (fatal archive error), **3** (checksum error), and **11** (wrong/required password) qualify for quarantine. Any other result prevents quarantine, even if other attempts return an eligible code. This tests whether an archive can be read without a password; it does not guess, recover, save, or ask for archive passwords. Code 2 is a broad fatal-error category, so inspect quarantined files manually before discarding them.
+The policy follows the supplied BAT: run `WinRAR.exe t -p- -ibck -inul <archive>`, with up to three attempts and a three-second delay between attempts. Any success stops retrying. Only three results from codes **2** (fatal archive error), **3** (checksum error), and **11** (wrong/required password) qualify for quarantine. Any other result prevents quarantine, even if other attempts return an eligible code. WinRAR's test command decompresses every file in memory and compares its CRC, so it detects damaged or truncated archives as well as encrypted ones; nothing is written to disk. Three code **11** results classify the archive as **Password**; any other qualifying combination (for example CRC errors) as **Damaged**. The app does not guess, recover, save, or ask for archive passwords. Code 2 is a broad fatal-error category, so inspect damaged files manually before discarding them.
 
-A qualifying file moves into **wrong_archives** beside its original location, within its chat directory. A unique suffix prevents overwriting another file with the same name. Hover over the row to see the reason and destination. Quarantined files remain recorded as downloaded and are skipped by Start and Check archives. You can inspect or recover them manually in Explorer; moving them back does not reset their saved status.
+A damaged archive moves into **wrong_archives\damaged** and a password-protected one into **wrong_archives\password**, beside its original location. Files moved by earlier versions stay directly in `wrong_archives`. A unique prefix prevents overwriting another file with the same name. Hover over the row to see the reason and destination. Quarantined files remain recorded as downloaded and are skipped by Start and Check archives. You can inspect or recover them manually in Explorer; moving them back does not reset their saved status.
 
 A missing, changed, locked, or unreadable file is not deliberately overwritten. Checks that time out (15 minutes per attempt), fail to launch, or return operational errors leave it in place. A move failure is shown as **Check failed**, with paths retained for inspection. A saved move interrupted by process exit is reconciled when its chat queue is displayed again. Known `.partNN.rar` volumes get **Check failed** with an explanation instead of being classified as broken because other volumes are absent. Other split/archive naming schemes are not detected reliably.
 
-WinRAR's test checks archive integrity; **Verified** does not mean antivirus-scanned or safe to execute. The app never extracts archive contents.
+WinRAR's test checks archive integrity; **Intact** does not mean antivirus-scanned or safe to execute. The app never extracts archive contents.
 
 ## 8. Pause, resume, finish current, stop, and close
 
@@ -245,7 +254,7 @@ Only the queue moves. `settings.json`, the encrypted `credentials.dpapi`, and up
 
 If the configured folder is missing at startup (for example, the drive is disconnected), the app does not fall back to another queue. It shows an error, queue operations stay blocked, and **Change…** lets you choose the folder again; select **Use existing** for a folder that already holds the queue.
 
-**Backup** saves a checked copy of the queue together with `settings.json` into `backups\manual-<time>-<id>` next to the queue database, so a synced queue folder also syncs its backups. It works while downloading. The newest ten manual backups are kept. To restore one, close the app and copy its `queue.sqlite3` over the queue file.
+**Backup** saves one ZIP file, `backups\manual-<time>-<id>.zip`, next to the queue database, so a synced queue folder also syncs its backups. The ZIP contains `queue.sqlite3` (checked for integrity before packing) and `settings.json`; the archive itself is verified after writing. It works while downloading. The newest ten ZIP backups are kept; folder backups made by version 1.0.7 or 1.0.8 are left untouched. To restore one, close the app, extract `queue.sqlite3` from the ZIP, and put it in place of the queue file.
 
 DPAPI normally binds saved secrets to the same Windows user on the same computer. Copying the encrypted file to another computer is not a migration method: sign in again there. DPAPI does not protect against malicious code already running as your Windows user. Downloaded archives and queue metadata are **not** encrypted by the app.
 
@@ -270,7 +279,7 @@ To remove the application, sign out first if possible, close it, then delete its
 | Expected files are not downloading | Open the **Skipped** queue view and hover over a row. Adjust or turn off **Name filter**, or turn off **Skip already downloaded**, in Hunting. |
 | Unchecked | Install WinRAR, select WinRAR.exe with WinRAR…, then click Check archives. |
 | Check failed | Hover over the row. Check permissions, file existence, available memory, and WinRAR installation. Multipart sets require a manual test. |
-| Quarantined | Open the chat's wrong_archives folder. The file was retained after repeated password/archive errors. |
+| Damaged or Password | Open `wrong_archives\damaged` or `wrong_archives\password` beside the download. The file was retained after three confirmed errors; hover over the row for the WinRAR codes. |
 | Existing destination differs | Move the conflicting file aside before retrying. The application does not overwrite it. |
 | Attachment changed or was deleted | The old partial is preserved; that queue item cannot be safely resumed. A fresh repost with a new message ID can be discovered by Scan archives. |
 

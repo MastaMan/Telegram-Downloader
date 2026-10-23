@@ -1143,11 +1143,11 @@ class Engine:
             report('Waiting to check archive…')
             result = await check_archive(path, executable, self.gate, report)
             if result.status == 'bad':
-                destination = quarantine_destination(path)
+                destination = quarantine_destination(path, result.kind)
                 update(verification='quarantining', quarantine_path=str(destination), verification_error=result.detail)
                 move_to_quarantine(path, destination)
                 update(verification='quarantined')
-                self.emit('log', f'{job["name"]}: moved to wrong_archives. {result.detail}')
+                self.emit('log', f'{job["name"]}: moved to {destination.parent.relative_to(path.parent)}. {result.detail}')
             else:
                 update(verification=result.status, verification_error='' if result.status == 'ok' else result.detail,
                        quarantine_path='')

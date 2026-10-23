@@ -68,6 +68,17 @@ class CheckerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.status, 'error')
             self.assertEqual(count, 3)
 
+    async def test_results_separate_damaged_from_password_protected(self):
+        result, _ = await self.result_for([0])
+        self.assertIn('every file passed the WinRAR CRC test', result.detail)
+        result, _ = await self.result_for([11, 11, 11])
+        self.assertEqual(result.kind, 'password')
+        self.assertTrue(result.detail.startswith('Password-protected archive'))
+        for codes in ([3, 3, 3], [2, 2, 2], [2, 3, 11], [11, 11, 3]):
+            result, _ = await self.result_for(codes)
+            self.assertEqual(result.kind, 'damaged', codes)
+            self.assertTrue(result.detail.startswith('Damaged archive'))
+
     async def test_launch_failure_never_allows_quarantine(self):
         with patch('tgzip.archive_check.asyncio.create_subprocess_exec', AsyncMock(side_effect=FileNotFoundError)):
             result = await check_archive('a.rar', 'missing.exe', self.gate, lambda text: None)
@@ -147,6 +158,22 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.engine.store.next_job(1, -10))
         self.assertIsNone(self.engine.store.next_check_job(1, -10))
         self.assertEqual(self.engine.store.summary(1, -10)['quarantined'], 1)
+
+    async def test_damaged_and_password_archives_use_separate_folders(self):
+        await self.verify(CheckResult('bad', 'Password-protected archive.', 11, 'password'))
+        self.assertEqual(Path(self.job()['quarantine_path']), self.root / 'wrong_archives' / 'password' / 'sample.rar')
+        self.assertTrue(any(name == 'log' and 'moved to wrong_archives' in value and 'password' in value
+                            for name, value in self.events))
+        second = self.root / 'other.rar'
+        second.write_bytes(b'broken bytes')
+        self.engine.store.scanned(1, -10, 10, {'document': 4, 'name': second.name, 'size': second.stat().st_size, 'path': second})
+        self.engine.store.update(1, -10, 10, state='done', done=second.stat().st_size)
+        checker = AsyncMock(return_value=CheckResult('bad', 'Damaged archive.', 3, 'damaged'))
+        with patch.object(self.engine, 'checker', return_value=Path('WinRAR.exe')), patch('tgzip.engine.check_archive', checker):
+            await self.engine.verify_job(self.engine.store.jobs(1, -10)[1])
+        job = self.engine.store.jobs(1, -10)[1]
+        self.assertEqual(Path(job['quarantine_path']), self.root / 'wrong_archives' / 'damaged' / 'other.rar')
+        self.assertEqual(Path(job['quarantine_path']).read_bytes(), b'broken bytes')
 
     async def test_success_and_operational_errors_leave_original(self):
         await self.verify(CheckResult('ok', 'Verified.', 0))

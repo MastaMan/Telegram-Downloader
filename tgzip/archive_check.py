@@ -1,4 +1,4 @@
-"""Password-free WinRAR testing and conservative, non-overwriting quarantine."""
+"""WinRAR integrity testing (CRC of every file, no password) and conservative, non-overwriting quarantine."""
 import asyncio
 from dataclasses import dataclass
 import os
@@ -15,6 +15,8 @@ class CheckResult:
     status: str
     detail: str
     code: int | None = None
+    # For 'bad' results: 'damaged' (CRC or structure error) or 'password' (encrypted contents).
+    kind: str = ''
 
 
 def find_winrar(configured=''):
@@ -58,7 +60,7 @@ async def check_archive(path, executable, gate, report, *, retry_delay=3, timeou
     codes = []
     for attempt in range(1, 4):
         await gate.wait()
-        report(f'Checking archive without a password: attempt {attempt}/3…')
+        report(f'Checking archive integrity: attempt {attempt}/3…')
         process = None
         try:
             process = await asyncio.create_subprocess_exec(
@@ -77,19 +79,26 @@ async def check_archive(path, executable, gate, report, *, retry_delay=3, timeou
                 await _stop_process(process)
         await gate.wait()
         if code == 0:
-            return CheckResult('ok', 'Verified without a password.', code)
+            # WinRAR's test command decompresses every file and compares its CRC.
+            return CheckResult('ok', 'Archive intact: every file passed the WinRAR CRC test.', code)
         codes.append(code)
         if attempt < 3:
             await asyncio.sleep(retry_delay)
     if all(code in BAD_CODES for code in codes):
-        reason = 'Password required or incorrect' if codes[-1] == 11 else 'Damaged or invalid archive'
-        return CheckResult('bad', f'{reason}; confirmed by 3 checks (WinRAR codes: {codes}).', codes[-1])
+        if all(code == 11 for code in codes):
+            return CheckResult('bad', f'Password-protected archive: its contents cannot be tested without the password; '
+                                      f'confirmed by 3 checks (WinRAR codes: {codes}).', codes[-1], 'password')
+        return CheckResult('bad', f'Damaged archive: CRC or structure errors; confirmed by 3 checks (WinRAR codes: {codes}).',
+                           codes[-1], 'damaged')
     return CheckResult('error', f'WinRAR reported an operational or inconclusive error (codes: {codes}). The archive was not moved.', codes[-1])
 
 
-def quarantine_destination(source):
+def quarantine_destination(source, kind=''):
+    """wrong_archives\\damaged or wrong_archives\\password beside the file; kind-less results use wrong_archives."""
     source = Path(source)
     folder = source.parent / 'wrong_archives'
+    if kind in {'damaged', 'password'}:
+        folder = folder / kind
     folder.mkdir(parents=True, exist_ok=True)
     return FilenameAllocator([]).allocate(folder, source.name)
 
