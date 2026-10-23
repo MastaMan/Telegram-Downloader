@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
+import zipfile
 
 from updater import UpdateError, cancelled
 from .transfer import TransferError
@@ -15,7 +16,7 @@ from .transfer import TransferError
 
 BACKUP_LIMIT = 10
 BACKUP_NAME = re.compile(r"update-\d{8}T\d{12}Z-[0-9a-f]{32}")
-MANUAL_NAME = re.compile(r"manual-\d{8}T\d{12}Z-[0-9a-f]{32}")
+MANUAL_ZIP = re.compile(r"manual-\d{8}T\d{12}Z-[0-9a-f]{32}\.zip")
 
 
 def copy_database(source, target, *, pages=-1, cancel=None):
@@ -87,12 +88,38 @@ def backup_before_update(data_dir, settings_bytes, cancel, report, database=None
 
 
 def backup_queue(database, settings_bytes):
-    """Manual snapshot next to the queue database, so a synced queue folder also syncs its backups."""
+    """Manual ZIP snapshot (queue.sqlite3 + settings.json) next to the queue database, so synced folders sync it too."""
     database = Path(database)
+    backups = database.parent / 'backups'
+    temporary = None
     try:
-        return snapshot(database, database.parent / 'backups', settings_bytes, 'manual', MANUAL_NAME)
-    except (OSError, sqlite3.Error) as exc:
+        backups.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix='.pending-', dir=backups))
+        copy_database(database, temporary / 'queue.sqlite3')
+        package = temporary / 'backup.zip'
+        with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            archive.write(temporary / 'queue.sqlite3', 'queue.sqlite3')
+            archive.writestr('settings.json', settings_bytes)
+        with zipfile.ZipFile(package) as archive:
+            if archive.testzip() is not None or sorted(archive.namelist()) != ['queue.sqlite3', 'settings.json']:
+                raise zipfile.BadZipFile('Backup archive verification failed')
+        with package.open('r+b') as stream:
+            os.fsync(stream.fileno())
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        destination = backups / f'manual-{stamp}-{uuid.uuid4().hex}.zip'
+        package.rename(destination)
+        # Keep the newest ten ZIP backups; folders from earlier versions are left alone.
+        archives = sorted((item for item in backups.iterdir()
+                           if item != destination and MANUAL_ZIP.fullmatch(item.name) and item.is_file()
+                           and not item.is_symlink()), key=lambda item: item.name, reverse=True)
+        for old in archives[BACKUP_LIMIT - 1:]:
+            old.unlink()
+        return destination
+    except (OSError, sqlite3.Error, zipfile.BadZipFile) as exc:
         raise TransferError('Cannot create the queue backup. Check free space and permissions in the queue folder.') from exc
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)
 
 
 def move_aside(database):

@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from tgzip.engine import Engine
@@ -112,10 +113,15 @@ class QueueFolderTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.command('backup')
         destination = Path([value for name, value in self.events if name == 'backup_done'][-1])
         self.assertEqual(destination.parent, self.synced / 'backups')
-        with closing(sqlite3.connect(destination / 'queue.sqlite3')) as db:
+        self.assertEqual(destination.suffix, '.zip')
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(sorted(archive.namelist()), ['queue.sqlite3', 'settings.json'])
+            self.assertIn(b'database_dir', archive.read('settings.json'))
+            archive.extract('queue.sqlite3', self.root / 'restored')
+        with closing(sqlite3.connect(self.root / 'restored' / 'queue.sqlite3')) as db:
             self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(db.execute('SELECT name, done FROM jobs').fetchall(), [('a.zip', 40)])
-        self.assertIn(b'database_dir', (destination / 'settings.json').read_bytes())
+        self.assertEqual([p.name for p in (self.synced / 'backups').iterdir()], [destination.name])
 
 
 class BackupHelperTests(unittest.TestCase):
@@ -133,15 +139,19 @@ class BackupHelperTests(unittest.TestCase):
         self.db.close()
         self.temp.cleanup()
 
-    def test_manual_backups_keep_ten_and_never_prune_update_snapshots(self):
-        update = self.root / 'backups' / 'update-20260101T000000000000Z-' f'{"0" * 32}'
-        update.mkdir(parents=True)
-        (update / 'queue.sqlite3').write_bytes(b'x')
-        (update / 'settings.json').write_bytes(b'{}')
+    def test_manual_zip_backups_keep_ten_and_leave_other_snapshots(self):
+        backups = self.root / 'backups'
+        for name in ('update-20260101T000000000000Z-' + '0' * 32, 'manual-20260101T000000000000Z-' + '1' * 32):
+            (backups / name).mkdir(parents=True)
+            (backups / name / 'queue.sqlite3').write_bytes(b'x')
+            (backups / name / 'settings.json').write_bytes(b'{}')
+        (backups / 'personal.zip').write_bytes(b'keep')
         paths = [backup_queue(self.database, b'{}') for _ in range(12)]
-        self.assertEqual(sum(path.exists() for path in paths), 10)
-        self.assertTrue(update.exists())
-        self.assertEqual(len(list((self.root / 'backups').glob('manual-*'))), 10)
+        self.assertEqual([path.exists() for path in paths], [False, False] + [True] * 10)
+        self.assertTrue(all(path.suffix == '.zip' for path in paths))
+        self.assertEqual(len([item for item in backups.iterdir() if item.is_dir()]), 2)
+        self.assertEqual((backups / 'personal.zip').read_bytes(), b'keep')
+        self.assertFalse([item for item in backups.iterdir() if item.name.startswith('.pending-')])
 
     def test_copy_keeps_replaced_queue_with_its_wal(self):
         target_dir = self.root / 'target'
