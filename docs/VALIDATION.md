@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Patch release 1.0.10: daily automatic backups — 23 October 2026
+
+When the app opens, a background task creates `backups/auto/auto-<date>-<time>-<id>.zip` beside the queue database unless today already has one. It reuses the verified ZIP format of manual backups (integrity-checked queue copy plus settings), runs in a worker thread through a separate read-only SQLite connection so the window and operations never wait, keeps the newest 60 automatic backups, leaves manual/update backups and unrelated files alone, only logs failures, and is awaited when the app closes. An unavailable queue folder skips it.
+
+Python **3.14.8** on macOS with portable PowerShell **7.6.7**: **240 tests**, 239 passed and one skipped (Windows DPAPI). New coverage: one backup per local day, a second start the same day creating none, retention of exactly 60 across 66 days without touching a manual ZIP or other files, no leftover pending folders, the backup running outside the event-loop thread while boot returns immediately, and close waiting for it. Compilation, the environment probe and whitespace checks passed. Documentation previews were refreshed to v1.0.10 (no other visible change).
+
+Backups on a real Windows machine and inside a synced Dropbox folder were not exercised.
+
 ## Patch release 1.0.9: compact interface, clean launch, ZIP backups, and integrity statuses — 23 October 2026
 
 - **Compact, foldable interface.** Smaller type and paddings (controls about 24 px, 22 px queue rows), the account ID on the name row, the Settings card split into Download folder and Downloads, and settings-like cards (Hunting, Download folder, Downloads, Archive checks, Queue database) folded by default with one-line summaries. Buttons are colour-coded by purpose, checkboxes draw a real check mark, and Archive checks shows a clear WinRAR found / not found badge. The window reopens at its last geometry with the same folded cards (`window.ini` in the data folder).
