@@ -17,6 +17,8 @@ from .transfer import TransferError
 BACKUP_LIMIT = 10
 BACKUP_NAME = re.compile(r"update-\d{8}T\d{12}Z-[0-9a-f]{32}")
 MANUAL_ZIP = re.compile(r"manual-\d{8}T\d{12}Z-[0-9a-f]{32}\.zip")
+AUTO_LIMIT = 60
+AUTO_ZIP = re.compile(r"auto-\d{8}-\d{8}T\d{12}Z-[0-9a-f]{32}\.zip")
 
 
 def copy_database(source, target, *, pages=-1, cancel=None):
@@ -87,14 +89,13 @@ def backup_before_update(data_dir, settings_bytes, cancel, report, database=None
                           'Check free disk space and permissions in the application data folder.') from exc
 
 
-def backup_queue(database, settings_bytes):
-    """Manual ZIP snapshot (queue.sqlite3 + settings.json) next to the queue database, so synced folders sync it too."""
-    database = Path(database)
-    backups = database.parent / 'backups'
+def zip_snapshot(database, folder, settings_bytes, name, pattern, limit):
+    """Write folder/name as a verified ZIP (checked queue.sqlite3 + settings.json); keep the newest `limit` matches."""
+    folder = Path(folder)
     temporary = None
     try:
-        backups.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix='.pending-', dir=backups))
+        folder.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix='.pending-', dir=folder))
         copy_database(database, temporary / 'queue.sqlite3')
         package = temporary / 'backup.zip'
         with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -105,14 +106,13 @@ def backup_queue(database, settings_bytes):
                 raise zipfile.BadZipFile('Backup archive verification failed')
         with package.open('r+b') as stream:
             os.fsync(stream.fileno())
-        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-        destination = backups / f'manual-{stamp}-{uuid.uuid4().hex}.zip'
+        destination = folder / name
         package.rename(destination)
-        # Keep the newest ten ZIP backups; folders from earlier versions are left alone.
-        archives = sorted((item for item in backups.iterdir()
-                           if item != destination and MANUAL_ZIP.fullmatch(item.name) and item.is_file()
+        # Retention only touches this kind of ZIP; folders from earlier versions and other files stay.
+        archives = sorted((item for item in folder.iterdir()
+                           if item != destination and pattern.fullmatch(item.name) and item.is_file()
                            and not item.is_symlink()), key=lambda item: item.name, reverse=True)
-        for old in archives[BACKUP_LIMIT - 1:]:
+        for old in archives[limit - 1:]:
             old.unlink()
         return destination
     except (OSError, sqlite3.Error, zipfile.BadZipFile) as exc:
@@ -120,6 +120,32 @@ def backup_queue(database, settings_bytes):
     finally:
         if temporary is not None:
             shutil.rmtree(temporary, ignore_errors=True)
+
+
+def utc_stamp():
+    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+
+
+def backup_queue(database, settings_bytes):
+    """Manual ZIP snapshot next to the queue database, so synced folders sync it too."""
+    database = Path(database)
+    return zip_snapshot(database, database.parent / 'backups', settings_bytes,
+                        f'manual-{utc_stamp()}-{uuid.uuid4().hex}.zip', MANUAL_ZIP, BACKUP_LIMIT)
+
+
+def daily_backup(database, settings_bytes, today=None):
+    """Automatic ZIP snapshot in backups/auto, at most one per local calendar day; keeps the newest 60.
+
+    Returns the new file, or None when today's backup already exists.
+    """
+    database = Path(database)
+    folder = database.parent / 'backups' / 'auto'
+    day = (today or datetime.now()).strftime('%Y%m%d')
+    if folder.is_dir() and any(AUTO_ZIP.fullmatch(item.name) and item.name.startswith(f'auto-{day}-')
+                               for item in folder.iterdir()):
+        return None
+    return zip_snapshot(database, folder, settings_bytes, f'auto-{day}-{utc_stamp()}-{uuid.uuid4().hex}.zip',
+                        AUTO_ZIP, AUTO_LIMIT)
 
 
 def move_aside(database):

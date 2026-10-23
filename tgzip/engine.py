@@ -18,7 +18,7 @@ from .storage import (parallel_downloads, speed_limit, Store, atomic_write, load
 from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
-from .queue_backup import backup_before_update, backup_queue, copy_queue
+from .queue_backup import backup_before_update, backup_queue, copy_queue, daily_backup
 from .legacy_import import adopt, find_old_files, remove_empty_old_folders
 from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 
@@ -88,6 +88,8 @@ class Engine:
         self.database_error = None
         self.store = self.open_store()
         self.hunting_all = False
+        # The startup daily backup runs beside operations and is awaited on close.
+        self.backup_task = None
         self.client = None
         self.account = None
         self.chat = None
@@ -128,6 +130,22 @@ class Engine:
                                        'restart, or choose the queue folder again.')
                 return Store(':memory:')
         return Store(self.database_path())
+
+    def start_daily_backup(self):
+        """Once per calendar day at startup, in a worker thread so the window and downloads never wait."""
+        if self.database_error or (self.backup_task is not None and not self.backup_task.done()):
+            return
+        settings_bytes = json.dumps(self.settings, indent=2).encode('utf-8')
+        database = self.database_path()
+        async def run():
+            try:
+                destination = await asyncio.to_thread(daily_backup, database, settings_bytes)
+            except TransferError as exc:
+                self.emit('log', f'Daily backup was not created: {exc}')
+                return
+            if destination is not None:
+                self.emit('log', f'Daily backup saved: {destination}')
+        self.backup_task = asyncio.create_task(run(), name='Daily backup')
 
     def require_database(self):
         if self.database_error:
@@ -231,6 +249,7 @@ class Engine:
                 self.emit_database()
                 if self.database_error:
                     self.emit('error', self.database_error)
+                self.start_daily_backup()
                 self.emit('checker', self.checker())
                 self.secrets = self.vault.load()
                 self.emit('configured', bool(self.secrets.get('api_id')))
@@ -393,6 +412,9 @@ class Engine:
             elif command == 'close':
                 self.closing = True
                 await self.cancel()
+                if self.backup_task is not None:
+                    # Never cut a backup off halfway; the copy takes seconds.
+                    await asyncio.gather(self.backup_task, return_exceptions=True)
                 try:
                     if self.client:
                         self.persist_session()

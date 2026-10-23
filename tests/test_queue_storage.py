@@ -173,3 +173,73 @@ class BackupHelperTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DailyBackupTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        with closing(sqlite3.connect(self.root / 'queue.sqlite3')) as db:
+            db.execute('CREATE TABLE jobs(id INTEGER PRIMARY KEY)')
+            db.execute('INSERT INTO jobs VALUES (7)')
+            db.commit()
+        self.auto = self.root / 'backups' / 'auto'
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_one_backup_per_day_in_auto_folder_and_sixty_kept(self):
+        from datetime import datetime, timedelta
+        from tgzip.queue_backup import daily_backup
+        first = daily_backup(self.root / 'queue.sqlite3', b'{}', datetime(2026, 10, 23, 9))
+        self.assertEqual(first.parent, self.auto)
+        self.assertTrue(first.name.startswith('auto-20261023-'))
+        with zipfile.ZipFile(first) as archive:
+            self.assertEqual(sorted(archive.namelist()), ['queue.sqlite3', 'settings.json'])
+        self.assertIsNone(daily_backup(self.root / 'queue.sqlite3', b'{}', datetime(2026, 10, 23, 23)))
+        manual = self.root / 'backups' / ('manual-20260101T000000000000Z-' + '0' * 32 + '.zip')
+        manual.write_bytes(b'manual')
+        (self.auto / 'notes.txt').write_text('keep')
+        start = datetime(2026, 10, 24)
+        for day in range(65):
+            daily_backup(self.root / 'queue.sqlite3', b'{}', start + timedelta(days=day))
+        names = sorted(item.name for item in self.auto.iterdir() if item.suffix == '.zip')
+        self.assertEqual(len(names), 60)
+        # 66 days were backed up; the six oldest (23–28 October) were pruned.
+        self.assertTrue(names[0].startswith('auto-20261029-'))
+        self.assertTrue(manual.exists())
+        self.assertTrue((self.auto / 'notes.txt').exists())
+        self.assertFalse([item for item in self.auto.iterdir() if item.name.startswith('.pending-')])
+
+    async def test_boot_starts_backup_in_background_and_close_waits_for_it(self):
+        import threading
+        events = []
+        self.root = self.root / 'appdata'
+        self.root.mkdir()
+        self.auto = self.root / 'backups' / 'auto'
+        engine = Engine(self.root, lambda name, value: events.append((name, value)))
+        main_thread = threading.get_ident()
+        threads = []
+        original = __import__('tgzip.queue_backup', fromlist=['daily_backup']).daily_backup
+        def slow_backup(*args):
+            threads.append(threading.get_ident())
+            import time
+            time.sleep(.2)
+            return original(*args)
+        loop = asyncio.get_running_loop()
+        # Close normally stops the worker loop; keep the test's loop running.
+        with patch('tgzip.engine.daily_backup', side_effect=slow_backup), patch.object(loop, 'stop'):
+            await engine.command('boot')
+            # Boot returns before the backup finishes.
+            self.assertFalse(engine.backup_task.done())
+            await engine.command('close')
+        self.assertTrue(engine.backup_task.done())
+        self.assertNotEqual(threads, [main_thread])
+        self.assertEqual(len(list(self.auto.glob('auto-*.zip'))), 1)
+        self.assertTrue(any(name == 'log' and value.startswith('Daily backup saved') for name, value in events))
+        # A second start on the same day does not create another backup.
+        engine = Engine(self.root, lambda name, value: events.append((name, value)))
+        await engine.command('boot')
+        await engine.backup_task
+        self.assertEqual(len(list(self.auto.glob('auto-*.zip'))), 1)
+        engine.store.close()
