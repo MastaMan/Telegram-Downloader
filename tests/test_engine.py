@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from telethon import errors
+from telethon.tl.types import InputMessagesFilterDocument
 from tgzip.engine import Engine, error_text
 
 
@@ -125,8 +126,9 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         def message(id, name, mime='application/octet-stream'):
             return SimpleNamespace(id=id, document=SimpleNamespace(id=900 + id, size=100, mime_type=mime), file=SimpleNamespace(name=name))
         messages = [message(1, 'one.ZIP'), message(2, 'not.zip.exe'), message(3, 'two.zip'), message(4, 'pack.RAR'), message(5, None, 'application/vnd.rar'), message(6, 'pack.rar.exe')]
-        async def iter_messages(entity, *, min_id, reverse):
+        async def iter_messages(entity, *, min_id, reverse, filter):
             self.assertTrue(reverse)
+            self.assertIs(filter, InputMessagesFilterDocument)
             seen_min_ids.append(min_id)
             for msg in messages:
                 if msg.id > min_id:
@@ -866,7 +868,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         entered, stopped = threading.Event(), threading.Event()
         stage = self.root / 'staged-update'
         stage.mkdir()
-        def backup(data_dir, settings, cancel, report):
+        def backup(data_dir, settings, cancel, report, database):
+            self.assertEqual(database, self.root / 'queue.sqlite3')
             entered.set()
             try:
                 cancel.wait(3)

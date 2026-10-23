@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from telethon import errors
 from tgzip.engine import Engine
 from tgzip.storage import DEFAULT_NAME_FILTER, SKIP_FILTER, SKIP_KNOWN, name_matcher
 from tgzip.transfer import TransferError
@@ -151,7 +152,7 @@ class HuntingTests(unittest.IsolatedAsyncioTestCase):
         messages = [SimpleNamespace(id=i, document=SimpleNamespace(id=700 + i, size=100, mime_type='application/zip'),
                                     file=SimpleNamespace(name=name), media=i)
                     for i, name in enumerate(['7407604.67a7dac35b142.rar', 'Readable.rar', '1.b2.zip'], 1)]
-        async def iter_messages(entity, *, min_id, reverse):
+        async def iter_messages(entity, *, min_id, reverse, filter):
             for message in messages:
                 if message.id > min_id:
                     yield message
@@ -197,6 +198,66 @@ class HuntingTests(unittest.IsolatedAsyncioTestCase):
             self.engine.prepare_filename(job, SimpleNamespace(file=SimpleNamespace(name=job['name'])), filenames)
         paths = [Path(job['path']) for job in self.engine.store.jobs(123, -100)]
         self.assertEqual(paths, [self.downloads.resolve() / 'a.zip', old / 'b.zip', old / 'c.zip'])
+
+
+    def archive_messages(self, names, first=1):
+        return [SimpleNamespace(id=i, document=SimpleNamespace(id=1000 + i, size=100, mime_type='application/zip'),
+                                file=SimpleNamespace(name=name), media=i)
+                for i, name in enumerate(names, first)]
+
+    async def test_scan_honors_flood_waits_and_resumes_from_checkpoint(self):
+        messages = self.archive_messages(['1.a.rar', '2.b.rar', '3.c.rar'])
+        calls = []
+        async def iter_messages(entity, *, min_id, reverse, filter):
+            calls.append(min_id)
+            for message in messages:
+                if message.id > min_id:
+                    yield message
+                    if len(calls) == 1 and message.id == 1:
+                        raise errors.FloodWaitError(request=None, capture=7)
+        slept = []
+        async def no_wait(seconds, *args):
+            slept.append(seconds)
+        self.engine.client = SimpleNamespace(iter_messages=iter_messages)
+        with patch('tgzip.engine.asyncio.sleep', no_wait):
+            await self.engine.scan()
+        self.assertEqual(calls, [0, 1])
+        self.assertIn(7, slept)
+        self.assertEqual([job['message'] for job in self.engine.store.jobs(123, -100)], [1, 2, 3])
+        self.assertTrue(any(name == 'log' and '7-second wait' in value for name, value in self.events))
+
+    async def test_hunt_all_visits_pinned_chats_in_order_and_continues_after_errors(self):
+        self.engine.dialogs[-300] = dialog(-300, 'Hunt C')
+        history = {-100: self.archive_messages(['1.a.rar']), -200: self.archive_messages(['2.b.rar', 'Readable.rar'], 5)}
+        async def iter_messages(entity, *, min_id, reverse, filter):
+            if entity == -300:
+                raise ValueError('Fixture chat failure')
+            for message in history[entity]:
+                if message.id > min_id:
+                    yield message
+        async def get_messages(entity, ids):
+            return next(message for message in history[entity] if message.id == ids)
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
+            self.fetched.append((job['chat'], job['message']))
+            progress(job['size'], 0)
+        self.engine.client = SimpleNamespace(iter_messages=iter_messages, get_messages=get_messages)
+        self.engine.settings['pinned_chats'] = {'123': [-200, -300, -999, -100]}
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            await self.engine.command('hunt_all')
+            await asyncio.wait_for(self.engine.task, 2)
+        self.assertEqual(self.fetched, [(-200, 5), (-100, 1)])
+        progress = [value for name, value in self.events if name == 'hunt_progress']
+        self.assertEqual([(item['index'], item['name']) for item in progress if item], [(1, 'Hunt B'), (2, 'Hunt C'), (3, 'Hunt A')])
+        self.assertIsNone(progress[-1])
+        self.assertEqual(self.engine.chat, -100)
+        self.assertTrue(any(name == 'log' and value.startswith('Hunt C:') and 'next pinned chat' in value
+                            for name, value in self.events))
+        self.assertFalse(self.engine.hunting_all)
+
+    async def test_hunt_all_requires_an_accessible_pinned_chat(self):
+        self.engine.settings['pinned_chats'] = {'123': [-999]}
+        with self.assertRaises(TransferError):
+            await self.engine.command('hunt_all')
 
 
 if __name__ == '__main__':

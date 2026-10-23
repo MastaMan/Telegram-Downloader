@@ -3,20 +3,22 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 from pathlib import Path
 from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
+from telethon.tl.types import InputMessagesFilterDocument
 from telethon.crypto import aes
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
 from .storage import (parallel_downloads, speed_limit, Store, atomic_write, load_settings, safe_name, archive_extension,
-                      name_matcher, SkipRules, FILTER_MODES, SKIP_KNOWN, SKIP_FILTER)
+                      name_matcher, SkipRules, FILTER_MODES, SKIP_KNOWN, SKIP_FILTER, is_network_path)
 from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
-from .queue_backup import backup_before_update
+from .queue_backup import backup_before_update, backup_queue, copy_queue
 from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 
 # Server-requested waits, including FLOOD_PREMIUM_WAIT download throttling of
@@ -81,7 +83,10 @@ class Engine:
         self.vault = Vault(data_dir / 'credentials.dpapi')
         self.settings = load_settings(self.settings_path)
         self.secrets = {}
-        self.store = Store(data_dir / 'queue.sqlite3')
+        # Set when the configured queue folder is unavailable; queue operations stay blocked.
+        self.database_error = None
+        self.store = self.open_store()
+        self.hunting_all = False
         self.client = None
         self.account = None
         self.chat = None
@@ -103,6 +108,36 @@ class Engine:
         self.limiter = DownloadLimiter(self.settings.get('speed_limit'))
         # Global skip rules of the running download pass; None while idle.
         self.rules = None
+
+    def database_path(self):
+        folder = self.settings.get('database_dir')
+        return (Path(folder) if folder else self.data_dir) / 'queue.sqlite3'
+
+    def open_store(self):
+        folder = self.settings.get('database_dir')
+        if folder:
+            try:
+                if not Path(folder).is_dir():
+                    raise OSError('Folder not found')
+                return Store(self.database_path())
+            except (OSError, sqlite3.Error):
+                # Never fall back to the old local queue: two diverging queues
+                # would download files twice. Operations stay blocked instead.
+                self.database_error = (f'The queue database folder is unavailable: {folder}. Connect it and '
+                                       'restart, or choose the queue folder again.')
+                return Store(':memory:')
+        return Store(self.database_path())
+
+    def require_database(self):
+        if self.database_error:
+            raise TransferError(self.database_error)
+
+    def emit_database(self):
+        self.emit('database', {'path': str(self.database_path()), 'custom': bool(self.settings.get('database_dir')),
+                               'error': self.database_error})
+
+    def pinned(self):
+        return list(self.settings.get('pinned_chats', {}).get(str(self.account), []))
 
     def save_settings(self):
         atomic_write(self.settings_path, json.dumps(self.settings, indent=2).encode('utf-8'))
@@ -192,6 +227,9 @@ class Engine:
                 self.snapshot()
             elif command == 'boot':
                 self.emit('settings', self.settings)
+                self.emit_database()
+                if self.database_error:
+                    self.emit('error', self.database_error)
                 self.emit('checker', self.checker())
                 self.secrets = self.vault.load()
                 self.emit('configured', bool(self.secrets.get('api_id')))
@@ -220,6 +258,7 @@ class Engine:
                 if self.store.legacy_name_jobs(self.account, chat) or self.store.filename_moves(self.account, chat):
                     self.launch('renaming', self.restore_filenames)
             elif command == 'hunt':
+                self.require_database()
                 chat = int(args['chat'])
                 if chat not in self.dialogs:
                     raise ValueError('Chat not accessible')
@@ -231,6 +270,30 @@ class Engine:
                 if chat != self.chat:
                     await self.select_chat(chat)
                 self.launch('scanning', self.hunt)
+            elif command == 'hunt_all':
+                self.require_database()
+                if not self.account:
+                    return
+                if not self.settings.get('download_dir'):
+                    raise TransferError('Choose a download folder first.')
+                if not any(chat in self.dialogs for chat in self.pinned()):
+                    raise TransferError('Pin at least one accessible chat first.')
+                if self.hunting_all and self.task and not self.task.done():
+                    self.emit('log', 'Hunt all is already running. Stop it to start again.')
+                    return
+                await self.cancel()
+                self.launch('scanning', self.hunt_all)
+            elif command == 'backup':
+                self.require_database()
+                self.store.flush_progress()
+                settings_bytes = json.dumps(self.settings, indent=2).encode('utf-8')
+                destination = await asyncio.to_thread(backup_queue, self.database_path(), settings_bytes)
+                self.emit('log', f'Queue backup saved: {destination}')
+                self.emit('backup_done', str(destination))
+            elif command == 'database':
+                if self.task and not self.task.done():
+                    raise TransferError('Stop the current operation before changing the queue folder.')
+                await self.move_database(Path(args['path']), args.get('mode', 'copy'))
             elif command == 'pin':
                 if not self.account:
                     return
@@ -282,9 +345,11 @@ class Engine:
                 self.limiter.set_limit(self.settings['speed_limit'])
                 self.emit('settings', self.settings)
             elif command == 'scan':
+                self.require_database()
                 if self.chat and self.account:
                     self.launch('scanning', self.scan)
             elif command == 'start':
+                self.require_database()
                 if self.chat and self.account:
                     self.launch('downloading', self.download_queue)
             elif command == 'checker':
@@ -297,6 +362,7 @@ class Engine:
                 self.save_settings()
                 self.emit('checker', path)
             elif command == 'verify':
+                self.require_database()
                 if self.chat and self.account:
                     self.launch('verifying', self.verify_queue)
             elif command == 'update':
@@ -337,8 +403,11 @@ class Engine:
 
     async def update_application(self):
         cancel = threading.Event()
+        # An update backs up the queue in use; an unavailable queue folder blocks it.
+        self.require_database()
         self.store.flush_progress()
         settings_bytes = json.dumps(self.settings, indent=2).encode('utf-8')
+        database = self.database_path()
         def prepare_with_backup():
             plan = prepare_update(Path(__file__).resolve().parents[1],
                                   lambda text: self.emit('update_progress', text), cancel)
@@ -346,7 +415,7 @@ class Engine:
                 try:
                     backup = backup_before_update(
                         self.data_dir, settings_bytes, cancel,
-                        lambda text: self.emit('update_progress', text))
+                        lambda text: self.emit('update_progress', text), database=database)
                     self.emit('log', f'Queue and settings backup saved: {backup}')
                 except BaseException:
                     import shutil
@@ -536,9 +605,54 @@ class Engine:
             self.emit('state', previous_kind or 'idle')
             self.snapshot()
 
+    async def move_database(self, folder, mode):
+        """Copy the queue to another folder ('copy'/'replace') or open a queue already there ('use')."""
+        folder = folder.resolve()
+        if mode not in {'copy', 'replace', 'use'}:
+            raise ValueError('Unknown queue folder mode')
+        if not folder.is_dir():
+            raise TransferError('Choose an existing folder for the queue database.')
+        if is_network_path(folder):
+            raise TransferError('Network folders are not supported for the queue database. Choose a local or '
+                                'synced folder such as Dropbox on this computer.')
+        target = folder / 'queue.sqlite3'
+        if not self.database_error and target.resolve() == self.database_path().resolve():
+            return
+        if mode == 'use':
+            if not target.is_file():
+                raise TransferError('That folder has no queue.sqlite3 to use.')
+        else:
+            if self.database_error:
+                raise TransferError('The current queue is unavailable, so it cannot be copied. '
+                                    'Choose a folder that already contains the queue and select Use.')
+            self.store.flush_progress()
+            moved = await asyncio.to_thread(copy_queue, self.database_path(), target, mode == 'replace')
+            if moved:
+                self.emit('log', f'The queue that was in that folder was kept as {moved.name}.')
+        try:
+            store = Store(target)
+        except sqlite3.Error as exc:
+            raise TransferError('That queue database cannot be opened. Choose another folder or Replace it.') from exc
+        previous = self.database_path()
+        self.store.close()
+        self.store = store
+        self.database_error = None
+        if folder == self.data_dir.resolve():
+            self.settings.pop('database_dir', None)
+        else:
+            self.settings['database_dir'] = str(folder)
+        self.save_settings()
+        self.emit('settings', self.settings)
+        self.emit_database()
+        self.emit('log', f'Queue database: {target}. The previous file stays at {previous} and is no longer used.')
+        self.snapshot()
+
     async def select_chat(self, chat):
         # Switching chats serializes cancellation and saves the old file first.
         await self.cancel()
+        return self.switch_chat(chat)
+
+    def switch_chat(self, chat):
         chat = int(chat)
         if chat not in self.dialogs:
             raise ValueError('Chat not accessible')
@@ -591,6 +705,35 @@ class Engine:
             self.emit('state', 'paused')
         await self.download_queue()
 
+    async def hunt_all(self):
+        """Hunt every accessible pinned chat in pin order, one after another."""
+        chats = [chat for chat in self.pinned() if chat in self.dialogs]
+        self.hunting_all = True
+        try:
+            for index, chat in enumerate(chats, 1):
+                if self.finish_requested:
+                    self.emit('log', 'Hunt all stopped after Finish current. Remaining pinned chats were not hunted.')
+                    break
+                if chat != self.chat:
+                    self.switch_chat(chat)
+                name = self.dialogs[chat].name
+                self.emit('hunt_progress', {'index': index, 'total': len(chats), 'name': name})
+                self.emit('log', f'Hunt all {index}/{len(chats)}: {name}')
+                self.kind = 'scanning'
+                self.emit('state', 'scanning')
+                if not self.gate.is_set():
+                    self.emit('state', 'paused')
+                try:
+                    await self.hunt()
+                except Exception as exc:
+                    # One unavailable chat does not stop the others; Stop still cancels everything.
+                    self.emit('log', f'{name}: {error_text(exc)} Continuing with the next pinned chat.')
+            else:
+                self.emit('log', f'Hunt all finished: {len(chats)} pinned chats checked.')
+        finally:
+            self.hunting_all = False
+            self.emit('hunt_progress', None)
+
     async def scan(self):
         await self.restore_filenames()
         account, chat = self.account, self.chat
@@ -602,23 +745,33 @@ class Engine:
         if not cursor:
             self.emit('log', 'Scanning full history for ZIP and RAR archives. Existing queue entries are preserved.')
         count, last = 0, 0
-        async for message in self.client.iter_messages(self.dialogs[chat].input_entity, min_id=cursor, reverse=True):
-            await self.gate.wait()
-            item = None
-            doc = message.document
-            extension = archive_extension(message.file.name, doc.mime_type) if doc and message.file else None
-            if extension and not self.store.contains(account, chat, message.id):
-                name = safe_name(message.file.name or f'archive_{message.id}{extension}')
-                item = {'document': doc.id, 'name': name, 'size': doc.size,
-                        'path': filenames.allocate(root, name), 'naming_version': 1}
-            self.store.scanned(account, chat, message.id, item)
-            count += 1
-            now = time.monotonic()
-            if now - last > .5:
-                self.emit('scan', count)
-                self.snapshot()
-                last = now
-        self.emit('log', f'Scan complete: checked {count:,} messages. ZIP and RAR queue saved.')
+        while True:
+            try:
+                # Telegram's document filter skips text, photo and video messages server-side.
+                async for message in self.client.iter_messages(self.dialogs[chat].input_entity, min_id=cursor,
+                                                               reverse=True, filter=InputMessagesFilterDocument):
+                    await self.gate.wait()
+                    item = None
+                    doc = message.document
+                    extension = archive_extension(message.file.name, doc.mime_type) if doc and message.file else None
+                    if extension and not self.store.contains(account, chat, message.id):
+                        name = safe_name(message.file.name or f'archive_{message.id}{extension}')
+                        item = {'document': doc.id, 'name': name, 'size': doc.size,
+                                'path': filenames.allocate(root, name), 'naming_version': 1}
+                    self.store.scanned(account, chat, message.id, item)
+                    cursor = max(cursor, message.id)
+                    count += 1
+                    now = time.monotonic()
+                    if now - last > .5:
+                        self.emit('scan', count)
+                        self.snapshot()
+                        last = now
+                break
+            except FLOOD_WAITS as exc:
+                # Resume from the saved checkpoint after the requested wait.
+                self.emit('log', f'Scan: Telegram requested a {exc.seconds}-second wait. Scanning continues automatically.')
+                await asyncio.sleep(max(exc.seconds, 1))
+        self.emit('log', f'Scan complete: checked {count:,} files. ZIP and RAR queue saved.')
         self.apply_rules(account, chat)
         self.snapshot()
 

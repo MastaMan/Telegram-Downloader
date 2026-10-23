@@ -74,6 +74,19 @@ def parallel_downloads(value=None):
         return 20
 
 
+def is_network_path(path):
+    """SQLite locking and WAL are unreliable on network filesystems; synced local folders are fine."""
+    text = str(path)
+    if text.startswith(('\\\\', '//')):
+        return True
+    if os.name == 'nt':
+        import ctypes
+        drive = os.path.splitdrive(os.path.abspath(text))[0]
+        if drive:
+            return ctypes.windll.kernel32.GetDriveTypeW(drive + '\\') == 4  # DRIVE_REMOTE
+    return False
+
+
 def atomic_write(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")

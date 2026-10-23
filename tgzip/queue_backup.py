@@ -1,4 +1,4 @@
-"""Consistent local queue snapshots made before installing app updates."""
+"""Consistent queue snapshots: before app updates, on request, and when moving the queue."""
 from contextlib import closing
 from datetime import datetime, timezone
 import os
@@ -10,58 +10,120 @@ import tempfile
 import uuid
 
 from updater import UpdateError, cancelled
+from .transfer import TransferError
 
 
 BACKUP_LIMIT = 10
 BACKUP_NAME = re.compile(r"update-\d{8}T\d{12}Z-[0-9a-f]{32}")
+MANUAL_NAME = re.compile(r"manual-\d{8}T\d{12}Z-[0-9a-f]{32}")
 
 
-def backup_before_update(data_dir, settings_bytes, cancel, report):
-    """Use SQLite's backup API so committed WAL data is included."""
-    data_dir = Path(data_dir)
-    backups = data_dir / 'backups'
-    temporary = None
-    try:
-        cancelled(cancel)
-        report('Backing up queue and settings…')
-        backups.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix='.pending-', dir=backups))
-        database = temporary / 'queue.sqlite3'
-        source_uri = (data_dir / 'queue.sqlite3').resolve().as_uri() + '?mode=ro'
-        with closing(sqlite3.connect(source_uri, uri=True)) as source, closing(sqlite3.connect(database)) as target:
-            source.backup(target, pages=256, progress=lambda *_: cancelled(cancel), sleep=0.05)
-            target.execute('PRAGMA journal_mode=DELETE')
+def copy_database(source, target, *, pages=-1, cancel=None):
+    """Write a standalone, integrity-checked copy using SQLite's backup API (includes committed WAL data)."""
+    source_uri = Path(source).resolve().as_uri() + '?mode=ro'
+    progress = (lambda *_: cancelled(cancel)) if cancel is not None else None
+    with closing(sqlite3.connect(source_uri, uri=True)) as reader, closing(sqlite3.connect(target)) as writer:
+        # A single step (pages=-1) copies one consistent snapshot even while
+        # downloads keep committing through the application's connection.
+        reader.backup(writer, pages=pages, progress=progress, sleep=0.05)
+        writer.execute('PRAGMA journal_mode=DELETE')
+        if cancel is not None:
             def check_cancel():
                 cancelled(cancel)
                 return 0
-            target.set_progress_handler(check_cancel, 1000)
-            if target.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
-                raise UpdateError('Queue backup failed its integrity check. The update was not installed.')
-        cancelled(cancel)
-        with database.open('r+b') as stream:
-            os.fsync(stream.fileno())
+            writer.set_progress_handler(check_cancel, 1000)
+        if writer.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+            raise sqlite3.DatabaseError('Integrity check failed')
+    with Path(target).open('r+b') as stream:
+        os.fsync(stream.fileno())
+
+
+def snapshot(database, backups, settings_bytes, prefix, pattern, *, pages=-1, cancel=None):
+    """Create backups/<prefix>-<time>-<id> with queue.sqlite3 and settings.json; keep the newest ten."""
+    backups = Path(backups)
+    temporary = None
+    try:
+        backups.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix='.pending-', dir=backups))
+        copy_database(database, temporary / 'queue.sqlite3', pages=pages, cancel=cancel)
+        if cancel is not None:
+            cancelled(cancel)
         with (temporary / 'settings.json').open('wb') as stream:
             stream.write(settings_bytes)
             stream.flush()
             os.fsync(stream.fileno())
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-        destination = backups / f'update-{stamp}-{uuid.uuid4().hex}'
-        cancelled(cancel)
+        destination = backups / f'{prefix}-{stamp}-{uuid.uuid4().hex}'
+        if cancel is not None:
+            cancelled(cancel)
         temporary.rename(destination)
         temporary = None
         # Prune only completed snapshots owned by this feature, after success.
         snapshots = sorted(
             (item for item in backups.iterdir()
-             if item != destination and BACKUP_NAME.fullmatch(item.name) and item.is_dir() and not item.is_symlink()
+             if item != destination and pattern.fullmatch(item.name) and item.is_dir() and not item.is_symlink()
              and (item / 'queue.sqlite3').is_file() and (item / 'settings.json').is_file()),
             key=lambda item: item.name, reverse=True)
         for old in snapshots[BACKUP_LIMIT - 1:]:
             shutil.rmtree(old)
         return destination
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)
+
+
+def backup_before_update(data_dir, settings_bytes, cancel, report, database=None):
+    """Snapshot the queue into the local application data folder before an update."""
+    data_dir = Path(data_dir)
+    try:
+        cancelled(cancel)
+        report('Backing up queue and settings…')
+        return snapshot(database or data_dir / 'queue.sqlite3', data_dir / 'backups', settings_bytes,
+                        'update', BACKUP_NAME, pages=256, cancel=cancel)
     except (OSError, sqlite3.Error) as exc:
         cancelled(cancel)
         raise UpdateError('Cannot create or retain the queue backup. The update was not installed. '
                           'Check free disk space and permissions in the application data folder.') from exc
+
+
+def backup_queue(database, settings_bytes):
+    """Manual snapshot next to the queue database, so a synced queue folder also syncs its backups."""
+    database = Path(database)
+    try:
+        return snapshot(database, database.parent / 'backups', settings_bytes, 'manual', MANUAL_NAME)
+    except (OSError, sqlite3.Error) as exc:
+        raise TransferError('Cannot create the queue backup. Check free space and permissions in the queue folder.') from exc
+
+
+def move_aside(database):
+    """Rename an existing queue and its WAL/SHM files so a stale WAL is never applied to another database."""
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    database = Path(database)
+    moved = None
+    for suffix in ('', '-wal', '-shm'):
+        path = database.with_name(database.name + suffix)
+        if os.path.lexists(path):
+            target = database.with_name(f'{database.name}.replaced-{stamp}{suffix}')
+            os.replace(path, target)
+            moved = moved or target
+    return moved
+
+
+def copy_queue(source, target, replace=False):
+    """Copy the current queue into another folder; an existing queue there is kept under a .replaced name."""
+    target = Path(target)
+    temporary = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        copy_database(source, temporary)
+        moved = None
+        if os.path.lexists(target) or os.path.lexists(target.with_name(target.name + '-wal')):
+            if not replace:
+                raise TransferError('That folder already contains a queue. Choose to use it or replace it.')
+            moved = move_aside(target)
+        os.replace(temporary, target)
+        return moved
+    except (OSError, sqlite3.Error) as exc:
+        raise TransferError('Cannot copy the queue to that folder. Check free space and permissions.') from exc
     finally:
-        if temporary is not None:
-            shutil.rmtree(temporary, ignore_errors=True)
+        if temporary.exists():
+            temporary.unlink()

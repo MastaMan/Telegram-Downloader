@@ -27,9 +27,19 @@ Hunting settings are global keys in `settings.json`: `name_filter_enabled` (defa
 
 Scanning still records every ZIP/RAR archive. `SkipRules` decides what downloads: `Store.known_files` returns case-folded names and document IDs of `done` rows in every chat, excluding quarantined files. `Store.apply_skip_rules` moves waiting jobs between `queued`/`error` and the additive `skipped` state in one transaction, writing the reason to `error`. It runs at the start of each download pass, after each scan, and immediately when a hunting setting changes (except during scanning or filename restoration, which apply rules on completion). The scheduler checks the rules again at claim time and adds each claimed file to the known set, so duplicates in one pass download once and live rule changes affect waiting files. `next_job` and the Unfinished view exclude `skipped`; older versions treat it as unfinished and would download those files after a rollback.
 
-The `hunt` command selects a chat through the normal cancellation path and launches one operation: `scan`, then `download_queue` under the `downloading` kind. Clicking a running chat again is ignored.
+The `hunt` command selects a chat through the normal cancellation path and launches one operation: `scan`, then `download_queue` under the `downloading` kind. Clicking a running chat again is ignored. `hunt_all` runs the same sequence for each accessible pinned chat inside one operation, switching chats with `switch_chat` (no cancellation of its own task) and emitting `hunt_progress`. An exception in one chat is logged and the loop continues; cancellation propagates. A Finish current request stops the loop after the active chat.
+
+`scan` passes `InputMessagesFilterDocument`, so Telegram's `messages.search` returns only document messages; Telethon still pages 100 messages per request and waits one second between requests for long histories. The client uses `flood_sleep_threshold=0`, so FloodWait/FloodPremiumWait propagate: `scan` sleeps for the requested time and restarts `iter_messages` from the last stored document ID, which is also the persisted checkpoint.
 
 `target_folder` returns the base folder or the per-chat subfolder. Scan allocates new paths there. `relocate_unstarted` runs after filename preparation and moves a job's planned destination to the current folder only when it has no recorded bytes and neither the target nor its partial file exists. Partial and completed files never move.
+
+## Queue database location and backups
+
+`settings.json` stays in the application data folder and may hold `database_dir`. `Engine.open_store` opens `<database_dir>/queue.sqlite3`; when that folder or file cannot be opened it opens an in-memory store, sets `database_error`, and every queue operation (`scan`, `start`, `hunt`, `hunt_all`, `verify`, `backup`, update preparation) raises it. It never falls back to the local file, because two diverging queues would duplicate downloads.
+
+The `database` command requires an idle engine. `copy`/`replace` flush staged progress and use `queue_backup.copy_queue`: SQLite's backup API writes a temporary file in the target folder, the copy passes `integrity_check`, is switched to DELETE journaling and fsynced, then replaces the target. An existing target and its `-wal`/`-shm` files are renamed together to `.replaced-<time>` so a stale WAL can never be applied to another database. `use` opens an existing queue (normal `Store` migrations apply). The old store closes only after the new one opened. Selecting the data folder removes `database_dir`. `storage.is_network_path` rejects UNC paths and Windows `DRIVE_REMOTE` drives.
+
+`queue_backup.snapshot` is shared by update and manual backups. Manual backups copy in one backup step (`pages=-1`), giving a consistent snapshot while downloads commit through the application connection, and land in `backups/manual-*` beside the queue database with their own ten-snapshot retention; update backups keep using `update-*` in the data folder and now copy the queue that is actually in use.
 
 ## Concurrency and persistence
 
