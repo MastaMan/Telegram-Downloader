@@ -121,3 +121,61 @@ try {
     if ($null -ne (Get-PythonRuntime)) { throw 'Concurrent setup continued' }
 } finally { $guard.Dispose() }
 ''')
+
+    def test_selects_leftover_app_copies_and_old_scripts_only(self):
+        self.run_script(r'''
+$legacy = Join-Path $env:LOCALAPPDATA 'old downloader'
+New-Item -ItemType Directory -Path $legacy | Out-Null
+Set-Content -LiteralPath (Join-Path $legacy 'telegram_config.json') -Value '{}'
+$other = Join-Path $env:LOCALAPPDATA 'other bot'
+New-Item -ItemType Directory -Path $other | Out-Null
+$app = Join-Path $root '.venv-py314\Scripts\pythonw.exe'
+function P($id, $parent, $name, $line, $exe) {
+    [pscustomobject]@{ ProcessId = $id; ParentProcessId = $parent; Name = $name; CommandLine = $line; ExecutablePath = $exe }
+}
+$list = @(
+    (P 1 0 'explorer.exe' 'explorer.exe' 'C:\Windows\explorer.exe'),
+    (P 10 1 'cmd.exe' 'cmd /c Start.bat' 'C:\Windows\System32\cmd.exe'),
+    (P 11 10 'powershell.exe' 'powershell -Command launcher' 'powershell.exe'),
+    (P 20 1 'pythonw.exe' "`"$app`" -m tgzip" $app),
+    (P 21 1 'python.exe' "`"C:\Python\python.exe`" `"$(Join-Path $legacy 'downloader.py')`" --chat 5" 'C:\Python\python.exe'),
+    (P 22 1 'python.exe' "python `"$(Join-Path $other 'bot.py')`"" 'C:\Python\python.exe'),
+    (P 23 1 'notepad.exe' "notepad $root" 'C:\Windows\notepad.exe'),
+    (P 24 1 'pythonw.exe' 'C:\Elsewhere\pythonw.exe -m tgzip' 'C:\Elsewhere\pythonw.exe'),
+    (P 25 1 'python.exe' 'python -m tgzipper' 'C:\Python\python.exe')
+)
+$found = (@(Select-LeftoverProcesses $list $root 11) | ForEach-Object { "$($_.Id):$($_.Kind)" }) -join ','
+if ($found -ne '20:app,21:script,24:app') { throw "Unexpected targets: $found" }
+# The update helper and bootstrap that started this launcher are its ancestors.
+$chain = @(
+    (P 30 1 'python.exe' "`"$app`" `"$(Join-Path $root '.updates\stage\helper.py')`" --install plan" $app),
+    (P 31 30 'python.exe' "`"$app`" `"$(Join-Path $root 'bootstrap.py')`"" $app),
+    (P 32 31 'powershell.exe' 'powershell -Command launcher' 'powershell.exe')
+)
+if (@(Select-LeftoverProcesses $chain $root 32).Count) { throw 'Launcher ancestors were selected' }
+$setup = @(
+    (P 40 1 'python.exe' "`"$(Join-Path $root '.venv-py314\Scripts\python.exe')`" -m pip install -r requirements.txt" (Join-Path $root '.venv-py314\Scripts\python.exe')),
+    (P 41 1 'pythonw.exe' "`"$app`" -m tgzip" $app)
+)
+if (@(Select-LeftoverProcesses $setup $root 99).Count) { throw 'Dependency installation was interrupted' }
+''')
+
+    def test_stop_closes_targets_logs_them_and_respects_pending_update(self):
+        self.run_script(r'''
+$target = Join-Path $env:LOCALAPPDATA 'install'
+New-Item -ItemType Directory -Path $target | Out-Null
+$app = Join-Path $target '.venv-py314\Scripts\pythonw.exe'
+$script:stopped = @()
+function Get-CimInstance { param($ClassName, $ErrorAction)
+    @([pscustomobject]@{ ProcessId = 70; ParentProcessId = 1; Name = 'pythonw.exe'; CommandLine = "`"$app`" -m tgzip"; ExecutablePath = $app })
+}
+function Stop-Process { param($Id, [switch]$Force, $ErrorAction) $script:stopped += $Id }
+function Wait-Process { param($Id, $Timeout, $ErrorAction) }
+Stop-LeftoverProcesses $target
+if (($script:stopped -join ',') -ne '70') { throw "Unexpected stops: $($script:stopped -join ',')" }
+if (-not (Select-String -LiteralPath (Join-Path $target 'setup.log') -Pattern 'previous Telegram File Hunter process \(PID 70\)' -Quiet)) { throw 'Not logged' }
+Set-Content -LiteralPath (Join-Path $target '.update-pending.json') -Value '{}'
+function Get-CimInstance { throw 'Processes were queried during an update' }
+Stop-LeftoverProcesses $target
+if ($script:stopped.Count -ne 1) { throw 'A process was stopped during an update' }
+''')

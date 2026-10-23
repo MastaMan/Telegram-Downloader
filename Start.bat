@@ -112,13 +112,82 @@ function Get-PythonRuntime {
     } finally { if ($guard) { $guard.Dispose() } }
 }
 
+function Get-ScriptPaths([string] $commandLine) {
+    $paths = @()
+    foreach ($match in [regex]::Matches($commandLine, '"([^"]+\.pyw?)"|(\S+\.pyw?)(?=\s|$)')) {
+        if ($match.Groups[1].Success) { $paths += $match.Groups[1].Value } else { $paths += $match.Groups[2].Value }
+    }
+    return $paths
+}
+
+function Test-LegacyScript([string] $commandLine) {
+    # The earlier downloader scripts kept these files beside their .py file.
+    foreach ($path in (Get-ScriptPaths $commandLine)) {
+        try { $folder = Split-Path -Parent ([IO.Path]::GetFullPath($path)) } catch { continue }
+        foreach ($marker in @('telegram_config.json', 'telegram_zip_session.session')) {
+            if ($folder -and (Test-Path -LiteralPath (Join-Path $folder $marker) -PathType Leaf)) { return $true }
+        }
+    }
+    return $false
+}
+
+function Select-LeftoverProcesses($processes, [string] $root, [int] $selfId) {
+    $byId = @{}
+    foreach ($process in $processes) { $byId[[int]$process.ProcessId] = $process }
+    # Never stop this launcher or whatever started it (for example an update restart).
+    $protected = @{}
+    $id = $selfId
+    while ($id -and $byId.ContainsKey($id) -and -not $protected.ContainsKey($id)) {
+        $protected[$id] = $true
+        $id = [int]$byId[$id].ParentProcessId
+    }
+    $prefix = [IO.Path]::GetFullPath($root).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $targets = @()
+    foreach ($process in $processes) {
+        $processId = [int]$process.ProcessId
+        if ($protected.ContainsKey($processId) -or [string]$process.Name -notmatch '^pythonw?(\.exe)?$') { continue }
+        $line = [string]$process.CommandLine
+        $executable = [string]$process.ExecutablePath
+        $ours = $executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $line.IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $line -match '(^|\s)-m\s+tgzip(\s|$)'
+        if ($ours -and $line -match '(^|\s)-m\s+pip(\s|$)') {
+            # Interrupting dependency installation would leave a broken environment.
+            return @()
+        }
+        if ($ours) {
+            $targets += [pscustomobject]@{ Id = $processId; Kind = 'app'; Detail = $line }
+        } elseif (Test-LegacyScript $line) {
+            $targets += [pscustomobject]@{ Id = $processId; Kind = 'script'; Detail = $line }
+        }
+    }
+    return $targets
+}
+
+function Stop-LeftoverProcesses([string] $root) {
+    # An update helper is installing files; it restarts the application itself.
+    if (Test-Path -LiteralPath (Join-Path $root '.update-pending.json')) { return }
+    try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return }
+    foreach ($target in @(Select-LeftoverProcesses $processes $root $PID)) {
+        if ($target.Kind -eq 'app') { $text = 'Closing a previous Telegram File Hunter process' }
+        else { $text = 'Closing an old downloader script' }
+        Write-Host "$text (PID $($target.Id))..."
+        try { Add-Content -LiteralPath (Join-Path $root 'setup.log') -Value "$text (PID $($target.Id)): $($target.Detail)" } catch {}
+        Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $target.Id -Timeout 10 -ErrorAction SilentlyContinue
+    }
+}
+
 # RUN_LAUNCHER
 try {
+    $launchArgs = @()
+    if ($env:TD_LAUNCH_ARGS) { $launchArgs = @(ConvertFrom-Json $env:TD_LAUNCH_ARGS) }
+    # A clean start: leftovers of this app and the old scripts must not keep writing files.
+    # The preview mode never closes a running copy.
+    if ($launchArgs -notcontains '--demo') { Stop-LeftoverProcesses $root }
     $python = Get-PythonRuntime
     if (-not $python) { exit 0 }
     $env:TD_RUNTIME_READY = '1'
-    $launchArgs = @()
-    if ($env:TD_LAUNCH_ARGS) { $launchArgs = @(ConvertFrom-Json $env:TD_LAUNCH_ARGS) }
     & $python (Join-Path $root 'bootstrap.py') @launchArgs
     exit $LASTEXITCODE
 } catch {
