@@ -205,6 +205,8 @@ class Store:
         CREATE TABLE IF NOT EXISTS filename_moves (
           account INTEGER, chat INTEGER, message INTEGER, plan TEXT NOT NULL,
           PRIMARY KEY(account, chat, message));
+        CREATE TABLE IF NOT EXISTS local_files (
+          path TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, status TEXT NOT NULL);
         ''')
         with self.db:
             columns = {row[1] for row in self.db.execute('PRAGMA table_info(jobs)')}
@@ -334,7 +336,17 @@ class Store:
                 "SELECT name, document FROM jobs WHERE state='done' AND verification!='quarantined'"):
             names.add(name.casefold())
             documents.add(document)
+        # Archives adopted from the earlier scripts count by their original name.
+        names.update(name.casefold() for (name,) in self.db.execute('SELECT name FROM local_files'))
         return names, documents
+
+    def tracked_paths(self):
+        return {FilenameAllocator.key(path) for row in self.db.execute('SELECT path,partial_path,quarantine_path FROM jobs')
+                for path in row if path}
+
+    def add_local_file(self, path, name, size, status):
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO local_files VALUES (?,?,?,?)', (str(path), name, size, status))
 
     def apply_skip_rules(self, account, chat, rules):
         """Skip or restore every waiting job in one transaction; return skip counts by reason."""

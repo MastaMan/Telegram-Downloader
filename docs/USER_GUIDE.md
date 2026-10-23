@@ -9,7 +9,7 @@
 
 The application is independent of 3ds Max. It runs as a normal desktop program.
 
-The application version appears beside **Telegram Archive Desktop** in the top header and in the window title.
+The application version appears beside **Telegram File Hunter** in the top header and in the window title.
 
 ## 2. Install and launch
 
@@ -100,6 +100,16 @@ The app uses its saved queue to locate each file, then fetches original names fr
 Only tracked completed files matching the old naming scheme are eligible. Missing files, changed sizes, symbolic links, unavailable/edited Telegram attachments, and files locked by other programs are left alone. Files outside the saved queue are not guessed from their names. View **Activity** for restored/skipped counts; unlock files and refresh the chat list or press Start to retry. If recovery detects conflicting files at the saved source and destination, it preserves both and stops that operation for inspection. Keep `queue.sqlite3` when updating; without the queue and access to the original Telegram messages, full names cannot be recovered reliably.
 
 **Open** opens the currently selected base folder in Explorer. Hover over a queue row to see that file's full path, or its error if it has failed.
+
+### Import files from the earlier scripts
+
+The scripts used before this app saved archives in `group_<number>` folders with names such as `3800029.619b0e4d1b26c__msg89.zip`. This app never adds such suffixes; it keeps the original Telegram name. **Import old files…** in the Settings card adopts the old files:
+
+1. Choose the folder that contains them (for example, the download folder that holds the `group_…` folders) and confirm.
+2. Every `.zip`/`.rar` inside a `group_<number>` folder, and every archive named `…__msg<number>.zip/.rar`, gets its original name (the `__msg<number>` part is removed) and moves into the download folder.
+3. Imported names count as already downloaded, so **Skip already downloaded** never downloads them again in any chat.
+
+Nothing is overwritten. If the download folder already has a file with the same name and size, the old copy stays where it is and is only recorded; a different file with the same name receives the `__dup_2__` prefix. Files tracked by the queue, `wrong_archives`, and unfinished `.part` files are left alone; delete leftover `.part` files yourself if you do not need them. Empty `group_…` folders are removed afterwards. Every move is listed in `imports\import-<time>.tsv` in the application data folder. Running the import again only handles new old-layout files. Stop is available between files.
 
 Changing the folder or **Folder per chat** applies to every archive **without downloaded data** when its download starts, including queue entries found earlier. Archives with a `.part` file or downloaded bytes, and completed archives, stay where their data is, so incomplete downloads still resume safely. Do not move `.part` files while downloading.
 
@@ -211,7 +221,7 @@ The original JSON and `.session` files remain unchanged and may contain sensitiv
 
 ## 10. Storage and privacy
 
-Application data is under `%LOCALAPPDATA%\TelegramZipDesktop`. This original folder name is intentionally retained after the product title changed to Telegram Archive Desktop, so existing settings and credentials continue to work:
+Application data is under `%LOCALAPPDATA%\TelegramZipDesktop`. This original folder name is intentionally retained after the product was renamed (Telegram Archive Desktop, now Telegram File Hunter), so existing settings and credentials continue to work:
 
 | File | Contents |
 | --- | --- |
@@ -219,6 +229,7 @@ Application data is under `%LOCALAPPDATA%\TelegramZipDesktop`. This original fol
 | `settings.json` | Download folder, WinRAR path, and last selected chat per account; no API secret |
 | `queue.sqlite3` and its WAL/SHM files | Message/document identifiers, archive names, sizes, paths, scan checkpoints, and statuses (can be moved; see below) |
 | `backups\` | Queue and settings snapshots made before updates (the newest ten) |
+| `imports\` | Journals of **Import old files** moves (status, old path, new path) |
 | `app.lock` | Prevents another copy from opening the same queue |
 
 ### Queue database folder and backups

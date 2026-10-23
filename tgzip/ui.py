@@ -407,7 +407,7 @@ class Window(QMainWindow):
         self.checker_path = None
         self.verification_info = None
         self.update_plan = None
-        self.setWindowTitle(f'Telegram Archive Desktop v{__version__}' + (' — Preview' if demo else ''))
+        self.setWindowTitle(f'Telegram File Hunter v{__version__}' + (' — Preview' if demo else ''))
         self.resize(1150, 640)
         self.setMinimumSize(500, 340)
         self.setStyleSheet(STYLE)
@@ -429,13 +429,13 @@ class Window(QMainWindow):
         page.setContentsMargins(10, 8, 10, 6)
         page.setSpacing(6)
         header = QHBoxLayout()
-        logo = label('TA', 'logo')
+        logo = label('FH', 'logo')
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setFixedSize(28, 28)
         header.addWidget(logo)
         title_box = QHBoxLayout()
         title_box.setSpacing(8)
-        self.title_label = ElidedLabel('Telegram Archive Desktop', 'title')
+        self.title_label = ElidedLabel('Telegram File Hunter', 'title')
         title_box.addWidget(self.title_label, 1)
         self.version_label = label(f'v{__version__}', 'muted')
         self.version_label.setToolTip('Application version')
@@ -541,6 +541,10 @@ class Window(QMainWindow):
         self.open_btn.setToolTip('Open the archive folder for the selected chat.')
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
+        self.import_btn = button('Import old files…', self.import_old_files)
+        self.import_btn.setToolTip('Give archives saved by the earlier scripts (group_… folders, names ending in __msg<number>) '
+                                   'their original names, move them into the download folder, and skip them in future downloads.')
+        dest_layout.addWidget(self.import_btn)
         self.per_chat_check = QCheckBox('Folder per chat')
         self.per_chat_check.setToolTip('Save each chat in its own subfolder. Off: all chats share the download folder. '
                                        'Files that already have downloaded data stay where they are.')
@@ -756,7 +760,7 @@ class Window(QMainWindow):
         if not self.panel_dialog.isVisible():
             self.sidebar_scroll.setVisible(not narrow)
         self.badge.setVisible(not narrow)
-        self.title_label.setText('Telegram Archives' if small else 'Telegram Archive Desktop')
+        self.title_label.setText('File Hunter' if small else 'Telegram File Hunter')
         self.title_label.setFixedWidth(160 if small else 260)
         self.scan_btn.setText('Scan' if small else 'Scan archives')
         self.scan_btn.setToolTip('Scan archives in the selected chat.')
@@ -929,6 +933,19 @@ class Window(QMainWindow):
         self.filter_edit.setText(DEFAULT_NAME_FILTER)
         self.save_hunting()
 
+    def import_old_files(self):
+        source = QFileDialog.getExistingDirectory(self, 'Choose the folder with old downloads', self.folder)
+        if not source:
+            return
+        answer = QMessageBox.question(
+            self, 'Import old files',
+            f'Archives in group_… folders and files named like name__msg89.zip under\n{source}\n'
+            f'get their original names and move into\n{self.folder}\n\n'
+            'Existing files are never overwritten, .part files are left alone, and a journal of every move is saved. '
+            'Imported files are not downloaded again. Continue?')
+        if answer == QMessageBox.StandardButton.Yes:
+            self.send('import_old', path=source)
+
     def ask_existing_queue(self):
         box = QMessageBox(self)
         box.setWindowTitle('Queue database')
@@ -988,6 +1005,7 @@ class Window(QMainWindow):
         self.hunt_all_btn.setEnabled(bool(self.account) and self.state not in {'updating', 'authorizing'}
                                      and any(self.chat_box.findData(chat) >= 0 for chat in self.pinned_ids()))
         self.database_btn.setEnabled(idle)
+        self.import_btn.setEnabled(idle and bool(self.folder) and not (self.database_info or {}).get('error'))
         self.backup_btn.setEnabled(self.state != 'updating' and not (self.database_info or {}).get('error'))
         self.pinned_list.setEnabled(bool(self.account) and self.state not in {'updating', 'authorizing'})
         for widget in (self.filter_check, self.filter_mode, self.filter_edit, self.filter_reset, self.skip_check, self.per_chat_check):
@@ -1125,7 +1143,7 @@ class Window(QMainWindow):
                 self.operation_state = value
             if value == 'idle':
                 self.finish_requested = False
-            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'renaming': 'Restoring filenames…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
+            titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'renaming': 'Restoring filenames…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'importing': 'Importing old files…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             if not (previous_state == 'updating' and value == 'idle'):
                 hunt = self.hunt_info
@@ -1143,6 +1161,9 @@ class Window(QMainWindow):
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'import_progress':
+            if value:
+                self.footer.setText(f"Importing old files: {value['done']:,} / {value['total']:,}")
         elif name == 'hunt_progress':
             self.hunt_info = value
         elif name == 'backup_done':

@@ -33,6 +33,10 @@ The `hunt` command selects a chat through the normal cancellation path and launc
 
 `target_folder` returns the base folder or the per-chat subfolder. Scan allocates new paths there. `relocate_unstarted` runs after filename preparation and moves a job's planned destination to the current folder only when it has no recorded bytes and neither the target nor its partial file exists. Partial and completed files never move.
 
+## Importing files from the earlier scripts
+
+`legacy_import` recognizes the old layout: archives inside `group_<id>` folders and names matching `<original>__msg<id>.zip|rar`. `find_old_files` walks the chosen folder, skips `wrong_archives`, symlinks, `.part` files, and any path recorded in the queue (`Store.tracked_paths`). The `import_old` operation (`importing` kind) adopts each file in a worker thread: an existing same-name, same-size file means the old copy stays and is only recorded; otherwise a fresh `FilenameAllocator` (disk entries only, so queue reservations never force a prefix) picks the name and `move_without_overwrite` renames, links/unlinks, or copies across drives before publishing without replacing. Each move is awaited through `asyncio.shield`, so Stop finishes and records the current file first. Results go to the additive `local_files` table, whose names join `known_files`, and to a TSV journal under `imports/` in the data folder. Empty `group_*` folders are removed, then skip rules are reapplied to the selected chat.
+
 ## Queue database location and backups
 
 `settings.json` stays in the application data folder and may hold `database_dir`. `Engine.open_store` opens `<database_dir>/queue.sqlite3`; when that folder or file cannot be opened it opens an in-memory store, sets `database_error`, and every queue operation (`scan`, `start`, `hunt`, `hunt_all`, `verify`, `backup`, update preparation) raises it. It never falls back to the local file, because two diverging queues would duplicate downloads.

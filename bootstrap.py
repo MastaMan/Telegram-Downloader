@@ -138,7 +138,7 @@ def main():
         if not startup_ready(ROOT):
             return 0
         if app_running():
-            print('Telegram Archive Desktop is already running. Use the existing window.')
+            print('Telegram File Hunter is already running. Use the existing window.')
             return 0
         if os.environ.get('TD_RUNTIME_READY') != '1' or sys.version_info[:2] != (3, 14):
             return windows_launcher(sys.argv[1:])
@@ -185,7 +185,7 @@ def setup_window():
     except Exception:
         print('Python tkinter is missing. Repair Python and enable Tcl/Tk support.')
         return 1
-    window.title('Telegram Archive Desktop · First-time setup')
+    window.title('Telegram File Hunter · First-time setup')
     window.geometry('610x285')
     window.resizable(False, False)
     window.configure(bg='#101929')

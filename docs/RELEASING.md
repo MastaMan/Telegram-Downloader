@@ -1,6 +1,6 @@
 # Release procedure
 
-This is the operating procedure for agents maintaining Telegram Archive Desktop. Follow it together with [AGENTS.md](../AGENTS.md). The owner's latest explicit instructions take precedence.
+This is the operating procedure for agents maintaining Telegram File Hunter. Follow it together with [AGENTS.md](../AGENTS.md). The owner's latest explicit instructions take precedence.
 
 ## 1. Decide whether publication is authorized
 

@@ -1,6 +1,6 @@
-# Telegram Archive Desktop
+# Telegram File Hunter
 
-A standalone Windows application for downloading ZIP and RAR attachments from Telegram groups and channels that your account can access. Built with Python, PySide6 and Telethon. **No 3ds Max or other host application is required.**
+Formerly Telegram Archive Desktop. A standalone Windows application for downloading ZIP and RAR attachments from Telegram groups and channels that your account can access. Built with Python, PySide6 and Telethon. **No 3ds Max or other host application is required.**
 
 ![Interface preview with synthetic sample data](docs/interface-preview.png)
 
@@ -38,6 +38,7 @@ Intermediate download progress is batched into one database transaction about on
 - Scans request only messages with documents and continue automatically after Telegram FloodWait requests.
 - **Hunting rules** for all chats: a filename filter (regex or plain text; by default `^[0-9a-z]+\.[0-9a-z]+\.(zip|rar)$` for names such as `7407604.67a7dac35b142.rar`) and skipping archives already downloaded in any chat, by name or Telegram file. Skipped archives remain visible in their own queue view.
 - All chats save into one folder by default; **Folder per chat** keeps a subfolder per chat. Archives without downloaded data follow the current setting.
+- **Import old files…** renames archives from the earlier scripts (`group_<id>` folders, `name__msg<id>.zip`) to their original names, moves them into the download folder without overwriting, and skips them in future downloads.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
 - Original filenames are preserved, including extension case and long names. Only collisions add a removable prefix such as `__dup_2__`; Windows-invalid characters still need replacement.
 - Completed archives saved with old numbered names are restored automatically for the selected chat, including files in `wrong_archives`, using verified Telegram metadata and a recoverable rename journal.

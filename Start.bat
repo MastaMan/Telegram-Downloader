@@ -72,7 +72,7 @@ function Install-Python {
     New-Item -ItemType Directory -Path $stage | Out-Null
     try {
         $archive = Join-Path $stage 'python.zip'
-        Write-Host 'Downloading Python 3.14 for Telegram Archive Desktop...'
+        Write-Host 'Downloading Python 3.14 for Telegram File Hunter...'
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -UseBasicParsing -Uri $runtimeUrl -OutFile $archive -TimeoutSec 300
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $runtimeHash) {

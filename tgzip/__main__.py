@@ -9,12 +9,12 @@ from .ui import Window
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Telegram Archive Desktop')
+    parser = argparse.ArgumentParser(description='Telegram File Hunter')
     parser.add_argument('--demo', action='store_true', help='Preview with sample data; no login or credentials')
     parser.add_argument('--screenshot', help=argparse.SUPPRESS)
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
-    app.setApplicationName('Telegram Archive Desktop')
+    app.setApplicationName('Telegram File Hunter')
     app.setOrganizationName('TelegramZipDesktop')
     if not args.demo and os.name != 'nt':
         QMessageBox.critical(None, 'Windows required', 'Secure credentials use Windows DPAPI. Run with --demo to preview the interface on another operating system.')
@@ -28,7 +28,7 @@ def main():
             lock = QLockFile(str(data_dir / 'app.lock'))
             lock.setStaleLockTime(0)
             if not lock.tryLock(0):
-                QMessageBox.information(None, 'Already running', 'Telegram Archive Desktop is already open. Use the existing window.')
+                QMessageBox.information(None, 'Already running', 'Telegram File Hunter is already open. Use the existing window.')
                 return 0
             from .engine import Bridge
             bridge = Bridge(data_dir)

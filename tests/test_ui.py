@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QLockFile, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton, QProgressBar
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QProgressBar
 from shiboken6 import delete, isValid
 from tgzip.engine import Bridge
 from tgzip.storage import DEFAULT_NAME_FILTER
@@ -308,6 +308,27 @@ class UITests(unittest.TestCase):
         window.on_event('hunt_progress', {'index': 2, 'total': 3, 'name': 'Model Exchange'})
         window.on_event('state', 'scanning')
         self.assertTrue(window.footer.text().startswith('Hunt all 2/3 · Model Exchange · '))
+        window.close()
+
+    def test_import_old_files_asks_before_sending(self):
+        window = Window(demo=True)
+        window.on_event('state', 'idle')
+        sent = []
+        window.send = lambda command, **kwargs: sent.append((command, kwargs))
+        self.assertTrue(window.import_btn.isEnabled())
+        with patch('tgzip.ui.QFileDialog.getExistingDirectory', return_value='C:/old'), \
+             patch('tgzip.ui.QMessageBox.question', return_value=QMessageBox.StandardButton.No):
+            window.import_btn.click()
+        self.assertEqual(sent, [])
+        with patch('tgzip.ui.QFileDialog.getExistingDirectory', return_value='C:/old'), \
+             patch('tgzip.ui.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes) as question:
+            window.import_btn.click()
+        self.assertIn('__msg89', question.call_args.args[2])
+        self.assertEqual(sent, [('import_old', {'path': 'C:/old'})])
+        window.on_event('import_progress', {'done': 3, 'total': 10})
+        self.assertEqual(window.footer.text(), 'Importing old files: 3 / 10')
+        window.on_event('state', 'importing')
+        self.assertFalse(window.import_btn.isEnabled())
         window.close()
 
     def test_skipped_rows_have_their_own_queue_filter(self):

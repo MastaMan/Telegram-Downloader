@@ -14,11 +14,12 @@ from telethon.crypto import aes
 from PySide6.QtCore import QObject, Signal
 from .security import Vault, validate_keys, import_legacy_session
 from .storage import (parallel_downloads, speed_limit, Store, atomic_write, load_settings, safe_name, archive_extension,
-                      name_matcher, SkipRules, FILTER_MODES, SKIP_KNOWN, SKIP_FILTER, is_network_path)
+                      name_matcher, SkipRules, FILTER_MODES, SKIP_KNOWN, SKIP_FILTER, is_network_path, FilenameAllocator)
 from .transfer import download, DownloadLimiter, TransferError
 from .archive_check import check_archive, find_winrar, quarantine_destination, move_to_quarantine
 from .filename_restore import legacy_source, fingerprint, rename_completed, restore_move
 from .queue_backup import backup_before_update, backup_queue, copy_queue
+from .legacy_import import adopt, find_old_files, remove_empty_old_folders
 from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 
 # Server-requested waits, including FLOOD_PREMIUM_WAIT download throttling of
@@ -290,6 +291,14 @@ class Engine:
                 destination = await asyncio.to_thread(backup_queue, self.database_path(), settings_bytes)
                 self.emit('log', f'Queue backup saved: {destination}')
                 self.emit('backup_done', str(destination))
+            elif command == 'import_old':
+                self.require_database()
+                if not self.settings.get('download_dir'):
+                    raise TransferError('Choose a download folder first.')
+                source = Path(args['path']).resolve()
+                if not source.is_dir():
+                    raise TransferError('Choose an existing folder with the old downloads.')
+                self.launch('importing', lambda: self.import_old_files(source))
             elif command == 'database':
                 if self.task and not self.task.done():
                     raise TransferError('Stop the current operation before changing the queue folder.')
@@ -461,7 +470,7 @@ class Engine:
         self.snapshot()
         self.client = TelegramClient(StringSession(self.secrets.get('session', '')),
                                      self.secrets['api_id'], self.secrets['api_hash'],
-                                     device_model='Telegram Archive Desktop', system_version='Windows',
+                                     device_model='Telegram File Hunter', system_version='Windows',
                                      app_version='1.0.0', request_retries=2, connection_retries=3,
                                      retry_delay=2, timeout=15, flood_sleep_threshold=0)
         try:
@@ -646,6 +655,51 @@ class Engine:
         self.emit_database()
         self.emit('log', f'Queue database: {target}. The previous file stays at {previous} and is no longer used.')
         self.snapshot()
+
+    async def import_old_files(self, source):
+        """Rename and move archives from the earlier scripts into the download folder and remember them."""
+        folder = Path(self.settings['download_dir']).resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+        candidates = await asyncio.to_thread(find_old_files, source, self.store.tracked_paths())
+        # Imported files keep their original names; only files on disk can block a name.
+        allocator = FilenameAllocator([])
+        counts = {'moved': 0, 'duplicate': 0, 'kept': 0, 'failed': 0}
+        journal = []
+        self.emit('import_progress', {'done': 0, 'total': len(candidates)})
+        try:
+            for index, path in enumerate(candidates, 1):
+                await self.gate.wait()
+                move = asyncio.ensure_future(asyncio.to_thread(adopt, path, folder, allocator))
+                try:
+                    destination, status, name, size = await asyncio.shield(move)
+                except asyncio.CancelledError:
+                    # Stop never interrupts a move halfway; record it, then stop.
+                    destination, status, name, size = await move
+                    self.store.add_local_file(destination, name, size, status)
+                    journal.append(f'{status}\t{path}\t{destination}')
+                    raise
+                except OSError as exc:
+                    counts['failed'] += 1
+                    journal.append(f'failed\t{path}\t{type(exc).__name__}')
+                    self.emit('log', f'Import: {path.name} was left in place ({type(exc).__name__}).')
+                    continue
+                self.store.add_local_file(destination, name, size, status)
+                counts[status] += 1
+                journal.append(f'{status}\t{path}\t{destination}')
+                self.emit('import_progress', {'done': index, 'total': len(candidates)})
+        finally:
+            if journal:
+                stamp = time.strftime('%Y%m%d-%H%M%S')
+                log = self.data_dir / 'imports' / f'import-{stamp}.tsv'
+                atomic_write(log, ('status\told path\tnew path\n' + '\n'.join(journal) + '\n').encode('utf-8'))
+                self.emit('log', f'Import journal: {log}')
+            self.emit('import_progress', None)
+        removed = await asyncio.to_thread(remove_empty_old_folders, source)
+        self.emit('log', f"Imported old files: {counts['moved']:,} renamed and moved, {counts['kept']:,} already in place, "
+                         f"{counts['duplicate']:,} already present (old copy left in place), {counts['failed']:,} failed; "
+                         f'{removed:,} empty group folders removed. They count as downloaded for Skip already downloaded.')
+        if self.account and self.chat:
+            self.apply_rules(self.account, self.chat)
 
     async def select_chat(self, chat):
         # Switching chats serializes cancellation and saves the old file first.
