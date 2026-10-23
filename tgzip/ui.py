@@ -385,6 +385,8 @@ class Window(QMainWindow):
         self.finish_requested = False
         self.folder = ''
         self.settings_values = {}
+        self.database_info = None
+        self.hunt_info = None
         self.current_job = None
         self.transfers_info = None
         self.queue_rows = {}
@@ -485,7 +487,12 @@ class Window(QMainWindow):
         self.refresh_btn = button('Refresh chats', lambda: self.send('refresh'))
         chat_actions.addWidget(self.refresh_btn, 1)
         source_layout.addLayout(chat_actions)
-        source_layout.addWidget(label('Pinned · click to hunt', 'muted'))
+        pinned_heading = QHBoxLayout()
+        pinned_heading.addWidget(label('Pinned · click to hunt', 'muted'), 1)
+        self.hunt_all_btn = button('Hunt all', lambda: self.send('hunt_all'))
+        self.hunt_all_btn.setToolTip('Hunt every pinned chat in order: scan new messages, then download allowed archives.')
+        pinned_heading.addWidget(self.hunt_all_btn)
+        source_layout.addLayout(pinned_heading)
         self.pinned_list = QListWidget()
         # About four rows; longer lists scroll.
         self.pinned_list.setFixedHeight(112)
@@ -575,7 +582,19 @@ class Window(QMainWindow):
         check_actions.addWidget(self.checker_btn)
         check_actions.addWidget(self.verify_btn)
         checks.addLayout(check_actions)
-        self.settings_panel = SettingsPanel([account_card, source_card, hunt_card, dest_card, check_card])
+        database_card, database_layout = card()
+        database_layout.addWidget(label('Queue database', 'section'))
+        self.database_label = ElidedLabel('Local app data', 'muted')
+        database_layout.addWidget(self.database_label)
+        database_actions = QHBoxLayout()
+        self.database_btn = button('Change…', self.change_database)
+        self.database_btn.setToolTip('Keep the queue database in another folder, for example Dropbox. Stop operations first.')
+        self.backup_btn = button('Backup', lambda: self.send('backup'))
+        self.backup_btn.setToolTip('Save a checked copy of the queue and settings to the backups folder next to the queue database.')
+        database_actions.addWidget(self.database_btn)
+        database_actions.addWidget(self.backup_btn)
+        database_layout.addLayout(database_actions)
+        self.settings_panel = SettingsPanel([account_card, source_card, hunt_card, dest_card, check_card, database_card])
         self.sidebar_scroll = QScrollArea()
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sidebar_scroll.setWidgetResizable(True)
@@ -910,6 +929,30 @@ class Window(QMainWindow):
         self.filter_edit.setText(DEFAULT_NAME_FILTER)
         self.save_hunting()
 
+    def ask_existing_queue(self):
+        box = QMessageBox(self)
+        box.setWindowTitle('Queue database')
+        box.setText('This folder already contains a queue database.')
+        box.setInformativeText('Use existing: open that queue, for example one synced from another computer.\n'
+                               'Replace: copy the current queue there. The old file is kept as queue.sqlite3.replaced-….')
+        use = box.addButton('Use existing', QMessageBox.ButtonRole.AcceptRole)
+        replace = box.addButton('Replace', QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return {use: 'use', replace: 'replace'}.get(box.clickedButton())
+
+    def change_database(self):
+        current = str(Path(self.database_info['path']).parent) if self.database_info else ''
+        folder = QFileDialog.getExistingDirectory(self, 'Choose the queue database folder', current)
+        if not folder:
+            return
+        mode = 'copy'
+        if (Path(folder) / 'queue.sqlite3').exists():
+            mode = self.ask_existing_queue()
+            if mode is None:
+                return
+        self.send('database', path=folder, mode=mode)
+
     def choose_checker(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Select installed WinRAR.exe', '', 'WinRAR (WinRAR.exe)')
         if path:
@@ -942,6 +985,10 @@ class Window(QMainWindow):
         self.chat_box.setEnabled(bool(self.account))
         self.open_btn.setEnabled(bool(self.folder))
         self.pin_btn.setEnabled(bool(self.account) and self.selected is not None)
+        self.hunt_all_btn.setEnabled(bool(self.account) and self.state not in {'updating', 'authorizing'}
+                                     and any(self.chat_box.findData(chat) >= 0 for chat in self.pinned_ids()))
+        self.database_btn.setEnabled(idle)
+        self.backup_btn.setEnabled(self.state != 'updating' and not (self.database_info or {}).get('error'))
         self.pinned_list.setEnabled(bool(self.account) and self.state not in {'updating', 'authorizing'})
         for widget in (self.filter_check, self.filter_mode, self.filter_edit, self.filter_reset, self.skip_check, self.per_chat_check):
             widget.setEnabled(self.state != 'updating')
@@ -1081,7 +1128,9 @@ class Window(QMainWindow):
             titles = {'idle': 'Ready', 'connecting': 'Connecting…', 'authorizing': 'Waiting for sign-in…', 'refreshing': 'Refreshing chats…', 'renaming': 'Restoring filenames…', 'scanning': 'Scanning messages…', 'downloading': 'Downloading', 'verifying': 'Checking archives…', 'updating': 'Checking updates…', 'paused': 'Paused — progress saved'}
             self.file_status.setText(titles.get(value, value))
             if not (previous_state == 'updating' and value == 'idle'):
-                self.footer.setText(titles.get(value, value))
+                hunt = self.hunt_info
+                prefix = f"Hunt all {hunt['index']}/{hunt['total']} · {hunt['name']} · " if hunt and value != 'idle' else ''
+                self.footer.setText(prefix + titles.get(value, value))
             if value in {'idle', 'paused', 'verifying'}:
                 self.on_event('speed_reset', None)
             self.update_verification_indicator()
@@ -1094,6 +1143,21 @@ class Window(QMainWindow):
                 row = self.queue_rows.get(self.current_job['message'])
                 if row is not None:
                     self.file_status.setText(self.table.item(row, 3).text())
+        elif name == 'hunt_progress':
+            self.hunt_info = value
+        elif name == 'backup_done':
+            self.footer.setText('Queue backup saved: ' + value)
+        elif name == 'database':
+            self.database_info = value
+            path = Path(value['path'])
+            if value.get('error'):
+                self.database_label.setText('Unavailable: ' + path.parent.name)
+                self.database_label.setStyleSheet('color: #ff9a9d;')
+            else:
+                self.database_label.setText(path.parent.name if value.get('custom') else 'Local app data')
+                self.database_label.setStyleSheet('')
+            self.database_label.setToolTip(str(path) + '\nOpen a synced queue on one computer at a time; '
+                                           'close the app before using it elsewhere.')
         elif name == 'finish_current':
             self.finish_requested = bool(value)
         elif name == 'transfers':
@@ -1356,6 +1420,7 @@ class Window(QMainWindow):
         self.on_event('settings', {'download_dir': 'C:/Users/Alex/Downloads/Telegram Archives',
                                    'pinned_chats': {'123456789': [-100123, -100789, -100321]}})
         self.on_event('checker', 'C:/Program Files/WinRAR/WinRAR.exe')
+        self.on_event('database', {'path': 'C:/Users/Alex/Dropbox/Telegram Queue/queue.sqlite3', 'custom': True, 'error': None})
         rows = []
         for i, (name, size, done, state) in enumerate([
             ('Studio textures — collection 01.zip', 428, 428, 'done'),

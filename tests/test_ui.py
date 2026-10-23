@@ -277,6 +277,39 @@ class UITests(unittest.TestCase):
         self.assertFalse(window.pinned_list.item(0).isSelected())
         window.close()
 
+    def test_hunt_all_and_queue_database_controls(self):
+        window = Window(demo=True)
+        sent = []
+        window.send = lambda command, **kwargs: sent.append((command, kwargs))
+        self.assertTrue(window.hunt_all_btn.isEnabled())
+        window.hunt_all_btn.click()
+        self.assertEqual(sent[-1], ('hunt_all', {}))
+        self.assertEqual(window.database_label.text(), 'Telegram Queue')
+        self.assertFalse(window.database_btn.isEnabled())  # an operation is running in the demo
+        window.on_event('state', 'idle')
+        self.assertTrue(window.database_btn.isEnabled())
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('tgzip.ui.QFileDialog.getExistingDirectory', return_value=directory):
+                window.change_database()
+                self.assertEqual(sent[-1], ('database', {'path': directory, 'mode': 'copy'}))
+                (Path(directory) / 'queue.sqlite3').write_bytes(b'')
+                with patch.object(window, 'ask_existing_queue', return_value='use'):
+                    window.change_database()
+                self.assertEqual(sent[-1], ('database', {'path': directory, 'mode': 'use'}))
+                count = len(sent)
+                with patch.object(window, 'ask_existing_queue', return_value=None):
+                    window.change_database()
+                self.assertEqual(len(sent), count)
+        window.backup_btn.click()
+        self.assertEqual(sent[-1], ('backup', {}))
+        window.on_event('database', {'path': 'D:/Missing/queue.sqlite3', 'custom': True, 'error': 'Unavailable'})
+        self.assertEqual(window.database_label.text(), 'Unavailable: Missing')
+        self.assertFalse(window.backup_btn.isEnabled())
+        window.on_event('hunt_progress', {'index': 2, 'total': 3, 'name': 'Model Exchange'})
+        window.on_event('state', 'scanning')
+        self.assertTrue(window.footer.text().startswith('Hunt all 2/3 · Model Exchange · '))
+        window.close()
+
     def test_skipped_rows_have_their_own_queue_filter(self):
         window = Window(demo=True)
         rows = [{'message': 1, 'name': 'Readable.rar', 'size': 100, 'done': 0, 'state': 'skipped', 'path': 'Readable.rar',

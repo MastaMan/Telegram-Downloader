@@ -34,7 +34,8 @@ Intermediate download progress is batched into one database transaction about on
 - **Speed limit** dropdown: Unlimited by default, or 10 / 5 / 2 / 1 / 0.5 / 0.25 MB/s shared across all downloads. Change it live; the choice is remembered.
 - **Check updates** downloads the latest public GitHub main version and restarts through the dependency launcher. Settings, sessions, downloads, and the queue are preserved.
 - Groups and channels, including archived dialogs; searchable chat selector and automatic restoration of the last selection.
-- **Pinned chats** in a scrollable list: one click scans the chat for new messages and downloads the archives allowed by the Hunting rules.
+- **Pinned chats** in a scrollable list: one click scans the chat for new messages and downloads the archives allowed by the Hunting rules. **Hunt all** does this for every pinned chat in turn.
+- Scans request only messages with documents and continue automatically after Telegram FloodWait requests.
 - **Hunting rules** for all chats: a filename filter (regex or plain text; by default `^[0-9a-z]+\.[0-9a-z]+\.(zip|rar)$` for names such as `7407604.67a7dac35b142.rar`) and skipping archives already downloaded in any chat, by name or Telegram file. Skipped archives remain visible in their own queue view.
 - All chats save into one folder by default; **Folder per chat** keeps a subfolder per chat. Archives without downloaded data follow the current setting.
 - ZIP and RAR selection: `.zip` / `.rar` filenames, case-insensitive; nameless documents require a matching MIME type.
@@ -43,7 +44,7 @@ Intermediate download progress is batched into one database transaction about on
 - Automatic background checks with installed WinRAR after each download, while other files download, plus **Check archives** for previously downloaded files. Three confirmed password/archive failures move the file to `wrong_archives` without overwriting existing files.
 - Pause, resume, stop, network retries, rate-limit waits, and resumable `.part` files.
 - **Finish current** completes active downloads and pending archive checks, then stops without starting another archive. **Start** continues the remaining queue.
-- Durable SQLite queue and incremental history-scan checkpoints, isolated by Telegram account and chat.
+- Durable SQLite queue and incremental history-scan checkpoints, isolated by Telegram account and chat. The queue database can live in another local or synced folder (such as Dropbox), and **Backup** saves checked snapshots next to it.
 - QR sign-in with automatic code refresh and optional two-step verification password.
 - API credentials **and the Telegram authorization session** encrypted with Windows DPAPI. No plaintext session file is written by the application.
 - Optional import of the old `telegram_config.json` and `telegram_zip_session.session`.
