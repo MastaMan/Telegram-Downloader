@@ -3,40 +3,52 @@ import re
 import time
 from pathlib import Path
 import qrcode
-from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF
+from PySide6.QtCore import Qt, QTimer, QUrl, QRect, QPointF, QSettings
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QImage, QPainter, QPixmap, QPalette, QPen, QPolygonF, QIntValidator
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
+    QSizePolicy, QScrollArea, QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QStyleOptionComboBox, QStyle,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from .security import validate_keys
 from .storage import parallel_downloads, speed_limit, SPEED_LIMITS, QUEUE_PAGE_SIZE, DEFAULT_NAME_FILTER
 from . import __version__
 
 STYLE = '''
-QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 13px; }
+QWidget { background: #0d1422; color: #eaf0fa; font-family: "Segoe UI", "Inter", sans-serif; font-size: 12px; }
 QMainWindow { background: #0d1422; }
-QFrame#card { background: #151f30; border: 1px solid #253247; border-radius: 8px; }
+QFrame#card { background: #151f30; border: 1px solid #253247; border-radius: 6px; }
 QFrame#card QLabel, QFrame#card QWidget#transparent { background: transparent; }
-QLabel#muted { color: #99abc3; }
-QLabel#title { font-size: 18px; font-weight: 700; }
-QLabel#section { font-size: 14px; font-weight: 600; }
-QLabel#metric { font-size: 14px; font-weight: 600; }
-QLabel#badge { color: #69dcca; background: #153e3e; border-radius: 6px; padding: 4px 8px; }
-QLabel#logo { background: #4187ff; color: white; border-radius: 7px; font-size: 15px; font-weight: 800; }
-QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 5px; padding: 4px 8px; min-height: 20px; font-weight: 600; }
+QLabel#muted { color: #99abc3; font-size: 11px; }
+QLabel#title { font-size: 15px; font-weight: 700; }
+QLabel#section { font-size: 12px; font-weight: 600; }
+QLabel#metric { font-size: 13px; font-weight: 600; }
+QLabel#badge { color: #69dcca; background: #153e3e; border-radius: 5px; padding: 2px 7px; font-size: 11px; }
+QLabel#logo { background: #4187ff; color: white; border-radius: 6px; font-size: 12px; font-weight: 800; }
+QPushButton { background: #233149; border: 1px solid #34445f; border-radius: 4px; padding: 2px 8px; min-height: 18px; font-weight: 600; }
 QPushButton:hover { background: #304460; border-color: #6a91c7; }
 QPushButton:pressed { background: #17243a; }
 QPushButton:disabled { color: #6d7b90; background: #172134; border-color: #263249; }
 QPushButton#primary { background: #4689ff; color: white; border-color: #4689ff; }
 QPushButton#primary:hover { background: #639bff; }
 QPushButton#primary:disabled { background: #273d60; color: #7d91af; border-color: #273d60; }
-QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 4px 6px; min-height: 20px; selection-background-color: #3868ae; }
+QPushButton#success { background: #1f8f5f; color: white; border-color: #26a56f; }
+QPushButton#success:hover { background: #28a971; border-color: #5fd6a2; }
+QPushButton#success:disabled { background: #1b3a31; color: #6e9688; border-color: #1b3a31; }
+QPushButton#warning { background: #3a3020; color: #f1c36b; border-color: #6b5630; }
+QPushButton#warning:hover { background: #4a3d27; border-color: #f1c36b; }
+QPushButton#warning:disabled { background: #221f1c; color: #77705f; border-color: #2e2a22; }
+QPushButton#danger { background: #3b1f29; color: #ff9aa3; border-color: #6c2f3d; }
+QPushButton#danger:hover { background: #4e2733; border-color: #ff7a86; }
+QPushButton#danger:disabled { background: #221b24; color: #6f6274; border-color: #2d2331; }
+QPushButton#accent { background: #1c3540; color: #80d7e4; border-color: #2e5966; }
+QPushButton#accent:hover { background: #24434f; border-color: #80d7e4; }
+QPushButton#accent:disabled { background: #17222b; color: #5f7880; border-color: #22323b; }
+QLineEdit, QComboBox { background: #0f1828; border: 1px solid #33445f; border-radius: 4px; padding: 2px 6px; min-height: 18px; selection-background-color: #3868ae; }
 QLineEdit:focus, QComboBox:focus { border-color: #5996ff; }
 QLineEdit[invalid="true"] { border-color: #ff7a80; }
-QListWidget { background: #0f1828; border: 1px solid #33445f; border-radius: 5px; padding: 2px; outline: none; }
-QListWidget::item { padding: 3px 6px; border-radius: 4px; }
+QListWidget { background: #0f1828; border: 1px solid #33445f; border-radius: 4px; padding: 1px; outline: none; }
+QListWidget::item { padding: 1px 6px; border-radius: 3px; }
 QListWidget::item:hover { background: #1f2d44; }
 QListWidget::item:selected { background: #305588; color: #ffffff; }
 QListWidget:disabled { color: #6d7b90; }
@@ -45,17 +57,22 @@ QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #4a5d7c; bor
 QCheckBox::indicator:hover { border-color: #6a91c7; }
 QCheckBox::indicator:checked { background: #4689ff; border-color: #4689ff; }
 QCheckBox:disabled { color: #6d7b90; }
-QComboBox { padding-right: 28px; }
+QFrame#card QPushButton#cardHeader { background: transparent; border: none; padding: 0 0 0 14px; min-height: 18px;
+    text-align: left; font-size: 12px; font-weight: 600; color: #eaf0fa; }
+QFrame#card QPushButton#cardHeader:hover { color: #9cc3ff; }
+QFrame#card QLabel#pillOk { color: #69ddc3; background: #153e36; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
+QFrame#card QLabel#pillWarn { color: #f1c36b; background: #3a3020; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
+QComboBox { padding-right: 26px; }
 QComboBox QAbstractItemView { background: #162236; color: #eaf0fa; selection-background-color: #305588; }
-QComboBox::drop-down { width: 24px; border: none; }
+QComboBox::drop-down { width: 22px; border: none; }
 QComboBox::down-arrow { image: none; width: 0; height: 0; }
 QProgressBar { background: #26334a; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
 QProgressBar::chunk { background: #5c9aff; border-radius: 3px; }
 QProgressBar#overall::chunk { background: #48cbb5; }
 QTableWidget { background: #151f30; alternate-background-color: #182337; border: none; gridline-color: #263247; selection-background-color: #25446b; }
-QTableWidget::item { padding: 3px 5px; border-bottom: 1px solid #253147; }
-QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 5px; border: none; font-weight: 600; }
-QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 8px; padding: 8px; color: #acbdd3; font-size: 12px; }
+QTableWidget::item { padding: 1px 5px; border-bottom: 1px solid #253147; }
+QHeaderView::section { background: #1b283c; color: #a8b9cf; padding: 3px 5px; border: none; font-weight: 600; font-size: 11px; }
+QPlainTextEdit { background: #101929; border: 1px solid #26354c; border-radius: 6px; padding: 6px; color: #acbdd3; font-size: 11px; }
 QScrollBar:horizontal { background: #131d2e; height: 9px; border: none; border-radius: 4px; margin: 0; }
 QScrollBar:vertical { background: #131d2e; width: 9px; border: none; border-radius: 4px; margin: 0; }
 QScrollBar::handle:horizontal { background: #394b68; min-width: 24px; border: 1px solid #131d2e; border-radius: 4px; }
@@ -69,7 +86,7 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QScrollBar::up-arrow, QScrollBar::down-arrow, QScrollBar::left-arrow, QScrollBar::right-arrow { width: 0; height: 0; background: transparent; }
 QAbstractScrollArea::corner { background: #131d2e; border: none; }
-QToolTip { background: #23344e; color: #ffffff; border: 1px solid #567398; padding: 7px; }
+QToolTip { background: #23344e; color: #ffffff; border: 1px solid #567398; padding: 5px; }
 '''
 
 
@@ -117,6 +134,48 @@ class ArrowComboBox(QComboBox):
         painter.drawPolyline(QPolygonF([QPointF(6, 9), QPointF(12, 15), QPointF(18, 9)]))
 
 
+class CheckBox(QCheckBox):
+    """Draw a check mark over the stylesheet indicator; no image asset is needed."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.isChecked():
+            return
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        box = self.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, option, self)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = '#ffffff' if self.isEnabled() else '#8a98ad'
+        painter.setPen(QPen(QColor(color), 1.6, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        x, y, w, h = box.x(), box.y(), box.width(), box.height()
+        painter.drawPolyline(QPolygonF([QPointF(x + w * .24, y + h * .52), QPointF(x + w * .43, y + h * .71),
+                                        QPointF(x + w * .77, y + h * .31)]))
+
+
+class CardToggle(QPushButton):
+    """Card title that collapses its body; the chevron points right when collapsed, down when open."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.setObjectName('cardHeader')
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor('#a8b9cf'), 1.6, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        x, y = 5.0, self.height() / 2
+        points = ([(x - 3.5, y - 1.8), (x, y + 1.8), (x + 3.5, y - 1.8)] if self.isChecked()
+                  else [(x - 1.8, y - 3.5), (x + 1.8, y), (x - 1.8, y + 3.5)])
+        painter.drawPolyline(QPolygonF([QPointF(px, py) for px, py in points]))
+
+
 class ElidedLabel(QLabel):
     """Keep long names/statuses on one line without losing the full tooltip."""
 
@@ -144,10 +203,10 @@ class ActiveTransfer(QWidget):
     def __init__(self):
         super().__init__()
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(48)
+        self.setFixedHeight(40)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout.setSpacing(1)
         self.percent = label('0%')
         self.percent.setStyleSheet('font-size: 12px; font-weight: 600; background: transparent;')
         self.percent.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -216,10 +275,11 @@ def in_queue_mode(row, mode):
     return row['state'] == {'downloaded': 'done', 'skipped': 'skipped'}[mode]
 
 
-def button(text, slot, primary=False):
+def button(text, slot, role=''):
+    """Roles colour buttons by purpose: primary, success (go), warning (hold), danger (stop), accent (tools)."""
     widget = QPushButton(text)
-    if primary:
-        widget.setObjectName('primary')
+    if role:
+        widget.setObjectName(role)
     widget.clicked.connect(slot)
     return widget
 
@@ -228,9 +288,51 @@ def card():
     widget = QFrame()
     widget.setObjectName('card')
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(10, 8, 10, 8)
-    layout.setSpacing(6)
+    layout.setContentsMargins(8, 6, 8, 6)
+    layout.setSpacing(4)
     return widget, layout
+
+
+class CollapsibleCard(QFrame):
+    """A card whose body folds away; a short summary stays visible in the heading while folded."""
+
+    def __init__(self, title, expanded=False, on_toggle=None):
+        super().__init__()
+        self.setObjectName('card')
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 5, 8, 5)
+        outer.setSpacing(4)
+        heading = QHBoxLayout()
+        heading.setSpacing(6)
+        self.toggle = CardToggle(title)
+        heading.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self.summary = ElidedLabel('', 'muted')
+        self.summary.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        heading.addWidget(self.summary, 1)
+        outer.addLayout(heading)
+        self.body = QWidget()
+        self.body.setObjectName('transparent')
+        self.content = QVBoxLayout(self.body)
+        self.content.setContentsMargins(0, 0, 0, 0)
+        self.content.setSpacing(4)
+        outer.addWidget(self.body)
+        self.on_toggle = on_toggle
+        self.toggle.setChecked(expanded)
+        self.body.setVisible(expanded)
+        self.summary.setVisible(not expanded)
+        self.toggle.toggled.connect(self.set_expanded)
+
+    def set_expanded(self, expanded):
+        if self.toggle.isChecked() != expanded:
+            self.toggle.setChecked(expanded)  # Re-enters through toggled.
+            return
+        self.body.setVisible(expanded)
+        self.summary.setVisible(not expanded)
+        if self.on_toggle:
+            self.on_toggle(expanded)
+
+    def set_summary(self, text):
+        self.summary.setText(text)
 
 
 class SettingsPanel(QWidget):
@@ -242,7 +344,7 @@ class SettingsPanel(QWidget):
         self.columns = 0
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 4, 0)
-        self.grid.setSpacing(10)
+        self.grid.setSpacing(6)
         for widget in cards:
             widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.reflow()
@@ -408,10 +510,17 @@ class Window(QMainWindow):
         self.verification_info = None
         self.update_plan = None
         self.setWindowTitle(f'Telegram File Hunter v{__version__}' + (' — Preview' if demo else ''))
+        data_dir = getattr(bridge, 'data_dir', None)
+        self.window_settings = (QSettings(str(Path(data_dir) / 'window.ini'), QSettings.Format.IniFormat)
+                                if data_dir and not demo else None)
+        self.cards = {}
         self.resize(1150, 640)
         self.setMinimumSize(500, 340)
         self.setStyleSheet(STYLE)
         self.build_ui()
+        if self.window_settings is not None and self.window_settings.value('geometry') is not None:
+            # Qt moves a saved geometry back onto a connected screen if needed.
+            self.restoreGeometry(self.window_settings.value('geometry'))
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(1000)
@@ -426,12 +535,12 @@ class Window(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         page = QVBoxLayout(root)
-        page.setContentsMargins(10, 8, 10, 6)
-        page.setSpacing(6)
+        page.setContentsMargins(8, 6, 8, 4)
+        page.setSpacing(5)
         header = QHBoxLayout()
         logo = label('FH', 'logo')
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setFixedSize(28, 28)
+        logo.setFixedSize(22, 22)
         header.addWidget(logo)
         title_box = QHBoxLayout()
         title_box.setSpacing(8)
@@ -451,24 +560,35 @@ class Window(QMainWindow):
         header.addWidget(self.badge)
         page.addLayout(header)
         body = self.body_layout = QHBoxLayout()
-        body.setSpacing(8)
+        body.setSpacing(6)
         account_card, account_layout = card()
+        account_heading = QHBoxLayout()
+        account_heading.setSpacing(6)
         self.account_name = ElidedLabel('Connect Telegram', 'section')
-        account_layout.addWidget(self.account_name)
+        account_heading.addWidget(self.account_name, 1)
+        self.account_id = label('', 'muted')
+        self.account_id.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        account_heading.addWidget(self.account_id)
+        account_layout.addLayout(account_heading)
         self.account_detail = label('Sign in securely with a QR code.', 'muted')
         self.account_detail.setWordWrap(True)
         self.account_detail.setToolTip('Your Telegram session is encrypted and saved locally.')
         account_layout.addWidget(self.account_detail)
         account_actions = QHBoxLayout()
-        self.connect_btn = button('Connect', self.connect_account, True)
+        self.connect_btn = button('Connect', self.connect_account, 'primary')
         account_actions.addWidget(self.connect_btn)
         self.settings_btn = button('API settings', self.show_settings)
-        self.logout_btn = button('Sign out', lambda: self.send('logout'))
+        self.logout_btn = button('Sign out', lambda: self.send('logout'), 'danger')
         account_actions.addWidget(self.logout_btn)
         account_actions.addWidget(self.settings_btn)
         account_layout.addLayout(account_actions)
         source_card, source_layout = card()
-        source_layout.addWidget(label('Groups & channels', 'section'))
+        source_heading = QHBoxLayout()
+        source_heading.addWidget(label('Groups & channels', 'section'), 1)
+        self.refresh_btn = button('Refresh', lambda: self.send('refresh'))
+        self.refresh_btn.setToolTip('Reload the list of groups and channels. Stop the current operation first.')
+        source_heading.addWidget(self.refresh_btn)
+        source_layout.addLayout(source_heading)
         self.chat_box = ArrowComboBox()
         self.chat_box.setEditable(True)
         self.chat_box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -483,28 +603,23 @@ class Window(QMainWindow):
         chat_actions = QHBoxLayout()
         self.pin_btn = button('Pin', self.toggle_pin)
         self.pin_btn.setToolTip('Pin or unpin the selected chat in the hunting list.')
-        chat_actions.addWidget(self.pin_btn)
-        self.refresh_btn = button('Refresh chats', lambda: self.send('refresh'))
-        chat_actions.addWidget(self.refresh_btn, 1)
-        source_layout.addLayout(chat_actions)
-        pinned_heading = QHBoxLayout()
-        pinned_heading.addWidget(label('Pinned · click to hunt', 'muted'), 1)
-        self.hunt_all_btn = button('Hunt all', lambda: self.send('hunt_all'))
+        chat_actions.addWidget(self.pin_btn, 1)
+        self.hunt_all_btn = button('Hunt all', lambda: self.send('hunt_all'), 'success')
         self.hunt_all_btn.setToolTip('Hunt every pinned chat in order: scan new messages, then download allowed archives.')
-        pinned_heading.addWidget(self.hunt_all_btn)
-        source_layout.addLayout(pinned_heading)
+        chat_actions.addWidget(self.hunt_all_btn, 1)
+        source_layout.addLayout(chat_actions)
+        source_layout.addWidget(label('Pinned · click to hunt', 'muted'))
         self.pinned_list = QListWidget()
-        # About four rows; longer lists scroll.
-        self.pinned_list.setFixedHeight(112)
+        # About five rows; longer lists scroll.
+        self.pinned_list.setFixedHeight(104)
         self.pinned_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.pinned_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.pinned_list.setToolTip('Click a pinned chat to scan its new messages and download archives allowed by Hunting rules.')
         self.pinned_list.itemClicked.connect(self.hunt_item)
         source_layout.addWidget(self.pinned_list)
-        hunt_card, hunt_layout = card()
-        hunt_layout.addWidget(label('Hunting', 'section'))
+        hunt_card, hunt_layout = self.collapsible('hunting', 'Hunting')
         filter_row = QHBoxLayout()
-        self.filter_check = QCheckBox('Name filter')
+        self.filter_check = CheckBox('Name filter')
         self.filter_check.setToolTip('Download only archives whose filename matches. Applies to all chats.')
         self.filter_check.toggled.connect(self.save_hunting)
         filter_row.addWidget(self.filter_check, 1)
@@ -525,14 +640,12 @@ class Window(QMainWindow):
         self.filter_reset.setToolTip('Restore the default pattern: ' + DEFAULT_NAME_FILTER)
         pattern_row.addWidget(self.filter_reset)
         hunt_layout.addLayout(pattern_row)
-        self.skip_check = QCheckBox('Skip already downloaded')
+        self.skip_check = CheckBox('Skip already downloaded')
         self.skip_check.setToolTip('Skip archives whose name or Telegram file was already downloaded or marked in any chat.')
         self.skip_check.toggled.connect(self.save_hunting)
         hunt_layout.addWidget(self.skip_check)
-        dest_card, dest_layout = card()
-        dest_layout.addWidget(label('Settings', 'section'))
-        dest_layout.addWidget(label('Download folder', 'muted'))
-        self.folder_label = ElidedLabel('Choose a download folder', 'section')
+        dest_card, dest_layout = self.collapsible('folder', 'Download folder')
+        self.folder_label = ElidedLabel('Choose a download folder')
         dest_layout.addWidget(self.folder_label)
         self.folder_btn = button('Choose…', self.choose_folder)
         folder_actions = QHBoxLayout()
@@ -541,21 +654,22 @@ class Window(QMainWindow):
         self.open_btn.setToolTip('Open the archive folder for the selected chat.')
         folder_actions.addWidget(self.open_btn)
         dest_layout.addLayout(folder_actions)
-        self.import_btn = button('Import old files…', self.import_old_files)
+        self.import_btn = button('Import old files…', self.import_old_files, 'accent')
         self.import_btn.setToolTip('Give archives saved by the earlier scripts (group_… folders, names ending in __msg<number>) '
                                    'their original names, move them into the download folder, and skip them in future downloads.')
         dest_layout.addWidget(self.import_btn)
-        self.per_chat_check = QCheckBox('Folder per chat')
+        self.per_chat_check = CheckBox('Folder per chat')
         self.per_chat_check.setToolTip('Save each chat in its own subfolder. Off: all chats share the download folder. '
                                        'Files that already have downloaded data stay where they are.')
         self.per_chat_check.toggled.connect(lambda checked: self.send('hunting', folder_per_chat=checked))
         dest_layout.addWidget(self.per_chat_check)
+        limits_card, limits_layout = self.collapsible('downloads', 'Downloads')
         limits = QFormLayout()
         limits.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         limits.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        limits.setHorizontalSpacing(10)
-        limits.setVerticalSpacing(8)
-        limits.setContentsMargins(0, 4, 0, 0)
+        limits.setHorizontalSpacing(8)
+        limits.setVerticalSpacing(4)
+        limits.setContentsMargins(0, 0, 0, 0)
         self.parallel_box = ArrowComboBox()
         for count in range(1, 21):
             self.parallel_box.addItem(str(count), count)
@@ -563,43 +677,55 @@ class Window(QMainWindow):
         self.parallel_box.setToolTip('Change the limit live. Increasing starts more files; decreasing lets active files finish. Paused downloads wait for Resume.')
         self.parallel_box.currentIndexChanged.connect(
             lambda: self.send('parallel', value=self.parallel_box.currentData()))
-        self.parallel_box.setMinimumWidth(106)
-        limits.addRow(label('Parallel downloads', 'muted'), self.parallel_box)
+        self.parallel_box.currentIndexChanged.connect(self.update_card_summaries)
+        self.parallel_box.setMinimumWidth(96)
+        parallel_label = label('Parallel', 'muted')
+        parallel_label.setToolTip('Parallel downloads')
+        limits.addRow(parallel_label, self.parallel_box)
         self.speed_box = ArrowComboBox()
         for limit in SPEED_LIMITS:
             self.speed_box.addItem('Unlimited' if not limit else f'{limit:g} MB/s', limit)
         self.speed_box.setToolTip('Total download speed across all files. Changes apply while downloading.')
         self.speed_box.currentIndexChanged.connect(
             lambda: self.send('speed_limit', value=self.speed_box.currentData()))
-        self.speed_box.setMinimumWidth(106)
+        self.speed_box.currentIndexChanged.connect(self.update_card_summaries)
+        self.speed_box.setMinimumWidth(96)
         limits.addRow(label('Speed limit', 'muted'), self.speed_box)
-        dest_layout.addLayout(limits)
-        check_card, checks = card()
-        checks.addWidget(label('Archive checks', 'section'))
-        self.checker_label = ElidedLabel('WinRAR not configured', 'muted')
+        limits_layout.addLayout(limits)
+        check_card, checks = self.collapsible('checks', 'Archive checks')
+        checker_row = QHBoxLayout()
+        self.checker_state = label('WinRAR not found', 'pillWarn')
+        checker_row.addWidget(self.checker_state)
+        checker_row.addStretch()
+        checks.addLayout(checker_row)
+        self.checker_hint = label('', 'muted')
+        self.checker_hint.setWordWrap(True)
+        checks.addWidget(self.checker_hint)
+        # Shown only while an archive is being checked.
+        self.checker_label = ElidedLabel('', 'muted')
+        self.checker_label.hide()
         checks.addWidget(self.checker_label)
         check_actions = QHBoxLayout()
         self.checker_btn = button('WinRAR…', self.choose_checker)
-        self.checker_btn.setToolTip('Select the installed WinRAR.exe for automatic archive checks.')
-        self.verify_btn = button('Check archives', lambda: self.send('verify'))
+        self.checker_btn.setToolTip('Select the installed WinRAR.exe if it was not found automatically.')
+        self.verify_btn = button('Check archives', lambda: self.send('verify'), 'accent')
         self.verify_btn.setToolTip('Test the integrity of downloaded files in this chat. Damaged archives move to wrong_archives\\damaged, '
                                    'password-protected ones to wrong_archives\\password.')
         check_actions.addWidget(self.checker_btn)
         check_actions.addWidget(self.verify_btn)
         checks.addLayout(check_actions)
-        database_card, database_layout = card()
-        database_layout.addWidget(label('Queue database', 'section'))
+        database_card, database_layout = self.collapsible('database', 'Queue database')
         self.database_label = ElidedLabel('Local app data', 'muted')
         database_layout.addWidget(self.database_label)
         database_actions = QHBoxLayout()
         self.database_btn = button('Change…', self.change_database)
         self.database_btn.setToolTip('Keep the queue database in another folder, for example Dropbox. Stop operations first.')
-        self.backup_btn = button('Backup', lambda: self.send('backup'))
+        self.backup_btn = button('Backup', lambda: self.send('backup'), 'accent')
         self.backup_btn.setToolTip('Save a checked ZIP of the queue and settings to the backups folder next to the queue database.')
         database_actions.addWidget(self.database_btn)
         database_actions.addWidget(self.backup_btn)
         database_layout.addLayout(database_actions)
-        self.settings_panel = SettingsPanel([account_card, source_card, hunt_card, dest_card, check_card, database_card])
+        self.settings_panel = SettingsPanel([account_card, source_card, hunt_card, dest_card, limits_card, check_card, database_card])
         self.sidebar_scroll = QScrollArea()
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sidebar_scroll.setWidgetResizable(True)
@@ -619,7 +745,7 @@ class Window(QMainWindow):
         self.panel_layout.addWidget(panel_close)
         self.panel_dialog.finished.connect(self.restore_panel)
         content = QVBoxLayout()
-        content.setSpacing(6)
+        content.setSpacing(5)
         current_card, current = card()
         file_heading = QHBoxLayout()
         self.file_name = ElidedLabel('No active download', 'section')
@@ -662,11 +788,11 @@ class Window(QMainWindow):
         self.active_scroll.hide()
         current.addWidget(self.active_scroll)
         controls = QHBoxLayout()
-        self.scan_btn = button('Scan archives', lambda: self.send('scan'))
-        self.start_btn = button('▶  Start', lambda: self.send('start'), True)
-        self.pause_btn = button('Ⅱ  Pause', self.pause_resume)
-        self.stop_btn = button('■  Stop', lambda: self.send('stop'))
-        self.finish_btn = button('Finish current', lambda: self.send('finish_current'))
+        self.scan_btn = button('Scan archives', lambda: self.send('scan'), 'primary')
+        self.start_btn = button('▶  Start', lambda: self.send('start'), 'success')
+        self.pause_btn = button('Ⅱ  Pause', self.pause_resume, 'warning')
+        self.stop_btn = button('■  Stop', lambda: self.send('stop'), 'danger')
+        self.finish_btn = button('Finish current', lambda: self.send('finish_current'), 'warning')
         self.finish_btn.setToolTip('Finish active downloads and pending archive checks, then stop. No new downloads will start. Resume if paused.')
         self.stop_btn.setToolTip('Stop immediately and keep partial files for the next Start.')
         for btn in (self.scan_btn, self.start_btn, self.pause_btn, self.finish_btn, self.stop_btn):
@@ -696,7 +822,7 @@ class Window(QMainWindow):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['ARCHIVE', 'TRANSFERRED', 'PROGRESS', 'STATUS'])
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.verticalHeader().setDefaultSectionSize(22)
         self.table.setItemDelegateForColumn(2, ProgressDelegate(self.table))
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
@@ -748,6 +874,55 @@ class Window(QMainWindow):
         page.addWidget(self.footer)
         self.apply_window_layout()
 
+    def collapsible(self, key, title):
+        expanded = False
+        if self.window_settings is not None:
+            expanded = self.window_settings.value(f'cards/{key}', False, type=bool)
+        card = CollapsibleCard(title, expanded, lambda value: self.remember_card(key, value))
+        self.cards[key] = card
+        return card, card.content
+
+    def remember_card(self, key, expanded):
+        if self.window_settings is not None:
+            self.window_settings.setValue(f'cards/{key}', expanded)
+
+    def set_cards_expanded(self, expanded):
+        for card in self.cards.values():
+            card.set_expanded(expanded)
+
+    def update_card_summaries(self):
+        if not self.cards:
+            return
+        values = self.settings_values
+        if values.get('name_filter_enabled', True):
+            hunting = ('Regex' if values.get('name_filter_mode', 'regex') == 'regex' else 'Text') + ' filter'
+        else:
+            hunting = 'No filter'
+        if values.get('skip_known', True):
+            hunting += ' · skip downloaded'
+        self.cards['hunting'].set_summary(hunting)
+        folder = Path(self.folder).name if self.folder else 'Not set'
+        self.cards['folder'].set_summary(folder + (' · per chat' if values.get('folder_per_chat', False) else ''))
+        self.cards['downloads'].set_summary(f'{self.parallel_box.currentData()} parallel · {self.speed_box.currentText()}')
+        if self.verification_info:
+            checks = 'Checks paused' if self.state == 'paused' else 'Checking…'
+        else:
+            checks = 'WinRAR found' if self.checker_path else 'WinRAR not found'
+        self.cards['checks'].set_summary(checks)
+        info = self.database_info or {}
+        if info.get('error'):
+            database = 'Unavailable'
+        elif info.get('custom'):
+            database = Path(info['path']).parent.name
+        else:
+            database = 'Local app data'
+        self.cards['database'].set_summary(database)
+
+    def save_window_state(self):
+        if self.window_settings is not None:
+            self.window_settings.setValue('geometry', self.saveGeometry())
+            self.window_settings.sync()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'footer'):
@@ -774,10 +949,10 @@ class Window(QMainWindow):
         strip_width = max(0, count * (40 if small else 32) + (count - 1) * 6)
         self.active_strip.setMinimumWidth(strip_width)
         available_width = self.width() - 40 - (248 if not narrow else 0)
-        self.active_scroll.setFixedHeight((28 if short else 48) + (12 if strip_width > available_width else 0))
+        self.active_scroll.setFixedHeight((28 if short else 40) + (12 if strip_width > available_width else 0))
         for tile in self.transfer_tiles.values():
             tile.name.setVisible(not short)
-            tile.setFixedHeight(28 if short else 48)
+            tile.setFixedHeight(28 if short else 40)
         for widget, full, compact in ((self.first_page, 'First', '«'), (self.prev_page, 'Previous', '‹'),
                                       (self.next_page, 'Next', '›'), (self.last_page, 'Last', '»')):
             widget.setText(compact if small else full)
@@ -1126,15 +1301,27 @@ class Window(QMainWindow):
                                    matching=len(rows), request=self.queue_request))
 
     def update_verification_indicator(self):
+        found = bool(self.checker_path)
+        self.checker_state.setText('WinRAR found' if found else 'WinRAR not found')
+        self.checker_state.setObjectName('pillOk' if found else 'pillWarn')
+        self.checker_state.style().unpolish(self.checker_state)
+        self.checker_state.style().polish(self.checker_state)
+        self.checker_state.setToolTip(str(self.checker_path) if found else 'WinRAR.exe was not found in the standard folders.')
+        if found:
+            self.checker_hint.setText('Each download is tested automatically: CRC of every file, in memory.')
+        else:
+            self.checker_hint.setText('Install WinRAR or click WinRAR… to select it. Until then downloads stay Unchecked.')
         if self.verification_info:
             detail = self.verification_info['detail']
             attempt = detail.split('attempt ', 1)[-1] if 'attempt ' in detail else ''
             text = 'Checks paused' if self.state == 'paused' else 'Checking archive'
             self.checker_label.setText(text + (f' · {attempt}' if attempt else '…'))
             self.checker_label.setToolTip(self.verification_info['name'] + '\n' + detail)
+            self.checker_label.show()
         else:
-            self.checker_label.setText('Automatic checks on' if self.checker_path else 'WinRAR not configured')
-            self.checker_label.setToolTip(str(self.checker_path) if self.checker_path else 'Downloads remain Unchecked until WinRAR is configured. Install WinRAR and select WinRAR.exe.')
+            self.checker_label.setText('')
+            self.checker_label.hide()
+        self.update_card_summaries()
 
     def on_event(self, name, value):
         if name == 'state':
@@ -1180,6 +1367,7 @@ class Window(QMainWindow):
                 self.database_label.setStyleSheet('')
             self.database_label.setToolTip(str(path) + '\nOpen a synced queue on one computer at a time; '
                                            'close the app before using it elsewhere.')
+            self.update_card_summaries()
         elif name == 'finish_current':
             self.finish_requested = bool(value)
         elif name == 'transfers':
@@ -1250,12 +1438,16 @@ class Window(QMainWindow):
                 widget.blockSignals(False)
             self.validate_filter()
             self.rebuild_pinned()
+            self.update_card_summaries()
         elif name == 'account':
             if (self.account or {}).get('id') != (value or {}).get('id'):
                 self.reset_archive()
             self.account = value
             self.account_name.setText(value['name'] if value else 'Connect Telegram')
-            self.account_detail.setText(f'ID: {value["id"]}' if value else 'Sign in securely with a QR code.')
+            self.account_id.setText(f'ID {value["id"]}' if value else '')
+            self.account_id.setToolTip(f'Telegram account ID {value["id"]}' if value else '')
+            # The sign-in hint only takes a row while no account is connected.
+            self.account_detail.setVisible(not value)
             self.badge.setText('CONNECTED' if value else 'NOT CONNECTED')
             self.rebuild_pinned()
         elif name == 'dialogs':
@@ -1421,6 +1613,8 @@ class Window(QMainWindow):
             self.on_event('speed_reset', None)
 
     def closeEvent(self, event):
+        if not self.closing:
+            self.save_window_state()
         self.panel_dialog.close()
         self.activity_dialog.close()
         if self.can_close or self.demo or not self.bridge or not self.bridge.thread.is_alive():

@@ -68,13 +68,15 @@ class UITests(unittest.TestCase):
         self.assertTrue(window.chat_box.isEnabled())
         self.assertFalse(window.start_btn.isEnabled())
         for btn in window.findChildren(QPushButton):
-            if btn.isVisible():
-                self.assertGreaterEqual(btn.height(), 28, btn.text())
+            if btn.isVisible() and btn.objectName() != 'cardHeader':
+                # Compact controls: about 24 px high, never clipped below readable size.
+                self.assertTrue(20 <= btn.height() <= 26, (btn.text(), btn.height()))
         self.assertFalse(window.grab().isNull())
         window.close()
 
     def test_compact_layout_keeps_controls_visible_at_minimum_size(self):
         window = Window(demo=True)
+        window.set_cards_expanded(True)
         window.resize(1000, 680)
         window.show()
         self.app.processEvents()
@@ -115,6 +117,7 @@ class UITests(unittest.TestCase):
 
     def test_half_size_window_keeps_controls_and_scrollable_downloads_accessible(self):
         window = Window(demo=True)
+        window.set_cards_expanded(True)
         window.show()
         files = [dict(message=i, name=f'Archive {i}.zip', path=f'{i}.zip', size=100, done=i * 5)
                  for i in range(1, 21)]
@@ -172,6 +175,7 @@ class UITests(unittest.TestCase):
 
     def test_settings_cards_reflow_without_clipping_or_resetting_controls(self):
         window = Window(demo=True)
+        window.set_cards_expanded(True)
         window.show()
         window.show_panel()
         selected_chat = window.chat_box.currentData()
@@ -347,6 +351,79 @@ class UITests(unittest.TestCase):
         statuses = {window.table.item(i, 0).text(): window.table.item(i, 3).text() for i in range(window.table.rowCount())}
         self.assertEqual(statuses, {'broken.rar': 'Damaged', 'locked.rar': 'Password', 'old.rar': 'Password', 'good.rar': 'Intact'})
         window.close()
+
+    def test_compact_startup_folds_settings_and_shows_summaries(self):
+        window = Window(demo=True)
+        window.show()
+        self.app.processEvents()
+        # Account: name and ID share one row; the sign-in hint is hidden while signed in.
+        self.assertEqual(window.account_id.text(), 'ID 123456789')
+        self.assertEqual(window.account_id.y(), window.account_name.y())
+        self.assertGreater(window.account_id.x(), window.account_name.x())
+        self.assertTrue(window.account_detail.isHidden())
+        # Settings-like cards start folded with summaries, so the whole sidebar fits.
+        self.assertEqual(list(window.cards), ['hunting', 'folder', 'downloads', 'checks', 'database'])
+        self.assertTrue(all(not card.body.isVisible() for card in window.cards.values()))
+        self.assertEqual(window.sidebar_scroll.verticalScrollBar().maximum(), 0)
+        self.assertEqual(window.cards['downloads'].summary.text(), '20 parallel · Unlimited')
+        self.assertEqual(window.cards['folder'].summary.text(), 'Telegram Archives')
+        self.assertEqual(window.cards['database'].summary.text(), 'Telegram Queue')
+        window.cards['downloads'].toggle.click()
+        self.app.processEvents()
+        self.assertTrue(window.speed_box.isVisible())
+        self.assertTrue(window.cards['downloads'].summary.isHidden())
+        window.speed_box.setCurrentIndex(3)
+        self.assertEqual(window.cards['downloads'].summary.text(), '20 parallel · 2 MB/s')
+        for name, role in (('start_btn', 'success'), ('hunt_all_btn', 'success'), ('scan_btn', 'primary'),
+                           ('pause_btn', 'warning'), ('finish_btn', 'warning'), ('stop_btn', 'danger'),
+                           ('logout_btn', 'danger'), ('verify_btn', 'accent'), ('backup_btn', 'accent')):
+            self.assertEqual(getattr(window, name).objectName(), role, name)
+        window.close()
+
+    def test_checked_box_draws_a_light_check_mark(self):
+        window = Window(demo=True)
+        window.set_cards_expanded(True)
+        window.show()
+        self.app.processEvents()
+        box = window.skip_check
+        def brightest():
+            from PySide6.QtWidgets import QStyle, QStyleOptionButton
+            option = QStyleOptionButton()
+            box.initStyleOption(option)
+            rect = box.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, option, box)
+            image = box.grab().toImage()
+            ratio = image.devicePixelRatio()
+            return max(image.pixelColor(int(x * ratio), int(y * ratio)).lightness()
+                       for x in range(rect.left(), rect.right()) for y in range(rect.top(), rect.bottom()))
+        box.setChecked(True)
+        self.assertGreater(brightest(), 200)
+        box.setChecked(False)
+        self.assertLess(brightest(), 150)
+        window.close()
+
+    def test_window_geometry_and_folded_cards_are_remembered(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QRect, QSettings
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = SimpleNamespace(data_dir=Path(directory), event=SimpleNamespace(connect=lambda slot: None),
+                                     ready=SimpleNamespace(is_set=lambda: False),
+                                     thread=SimpleNamespace(is_alive=lambda: False))
+            with patch('tgzip.ui.QTimer.singleShot'):
+                first = Window(bridge)
+            first.setGeometry(QRect(40, 30, 700, 520))
+            first.cards['checks'].toggle.click()
+            first.close()
+            settings = QSettings(str(Path(directory) / 'window.ini'), QSettings.Format.IniFormat)
+            self.assertIsNotNone(settings.value('geometry'))
+            with patch('tgzip.ui.QTimer.singleShot'):
+                second = Window(bridge)
+            self.assertEqual((second.width(), second.height()), (700, 520))
+            self.assertTrue(second.cards['checks'].toggle.isChecked())
+            self.assertFalse(second.cards['database'].toggle.isChecked())
+            second.close()
+        demo = Window(demo=True)
+        self.assertIsNone(demo.window_settings)
+        demo.close()
 
     def test_skipped_rows_have_their_own_queue_filter(self):
         window = Window(demo=True)
@@ -591,7 +668,10 @@ class UITests(unittest.TestCase):
         self.assertTrue(window.verify_btn.isEnabled())
         window.on_event('verification', None)
         window.on_event('checker', None)
-        self.assertIn('not configured', window.checker_label.text())
+        self.assertEqual(window.checker_state.text(), 'WinRAR not found')
+        self.assertEqual(window.checker_state.objectName(), 'pillWarn')
+        self.assertIn('Install WinRAR', window.checker_hint.text())
+        self.assertEqual(window.cards['checks'].summary.text(), 'WinRAR not found')
         window.on_event('state', 'verifying')
         self.assertTrue(window.pause_btn.isEnabled())
         self.assertFalse(window.checker_btn.isEnabled())
@@ -614,7 +694,11 @@ class UITests(unittest.TestCase):
         window.on_event('state', 'downloading')
         self.assertIn('Checking', window.checker_label.text())
         window.on_event('verification', None)
-        self.assertEqual(window.checker_label.text(), 'Automatic checks on')
+        self.assertEqual(window.checker_label.text(), '')
+        self.assertTrue(window.checker_label.isHidden())
+        self.assertEqual(window.checker_state.text(), 'WinRAR found')
+        self.assertEqual(window.checker_state.objectName(), 'pillOk')
+        self.assertEqual(window.cards['checks'].summary.text(), 'WinRAR found')
         window.close()
 
     def test_update_control_and_result_survive_idle_transition(self):
