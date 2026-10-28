@@ -1,5 +1,13 @@
 # Validation and release limits
 
+## Patch release 1.0.11: a file timeout no longer stops the queue — 28 October 2026
+
+After a day of downloading, the owner saw the whole queue stop with "Network or local file operation failed (TimeoutError, code None). Check connection, disk space and folder permissions." `asyncio.TimeoutError` is the built-in `TimeoutError`, an `OSError` subclass, so when one file exhausted its network retries the disk-error check re-raised it and stopped the download pool. Network errors (connection errors, timeouts, Telegram server errors) now only fail their file, with "Telegram did not respond in time"; real disk errors still stop the queue. Files get five retries with 2–32 second backoff (about a minute), and scans and filename restoration retry network failures five times in a row from their checkpoint instead of ending the operation.
+
+Python **3.12.3** on macOS (the earlier portable Python 3.14.8 and PowerShell builds were no longer available on the host; the project supports 3.11–3.15): **244 tests**, 234 passed and ten skipped (Windows DPAPI and nine launcher tests that need PowerShell; `Start.bat` is unchanged). New coverage: a timeout exhausting a file's retries marks only that file failed while the others complete with no error event (this test fails against the 1.0.10 engine); a permission error still stops the queue; a scan resumes from its checkpoint after a timeout and a connection error with backoff reset by progress; a scan gives up after five consecutive failures; error texts. The retry budget test now expects five retries. Compilation, the environment probe and whitespace checks passed. Documentation previews were refreshed to v1.0.11 (no visible change).
+
+Real long-running Windows sessions and live Telegram outages were not exercised.
+
 ## Patch release 1.0.10: daily automatic backups — 23 October 2026
 
 When the app opens, a background task creates `backups/auto/auto-<date>-<time>-<id>.zip` beside the queue database unless today already has one. It reuses the verified ZIP format of manual backups (integrity-checked queue copy plus settings), runs in a worker thread through a separate read-only SQLite connection so the window and operations never wait, keeps the newest 60 automatic backups, leaves manual/update backups and unrelated files alone, only logs failures, and is awaited when the app closes. An unavailable queue folder skips it.
