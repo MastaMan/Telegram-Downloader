@@ -324,7 +324,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         async def get_messages(*args, **kwargs):
             return SimpleNamespace(document=SimpleNamespace(id=111, size=100))
         failures = [errors.FloodPremiumWaitError(request=None, capture=1), ConnectionError(),
-                    errors.FloodWaitError(request=None, capture=1)] + [ConnectionError()] * 4
+                    errors.FloodWaitError(request=None, capture=1)] + [ConnectionError()] * 6
         calls = []
         async def transfer(*args, **kwargs):
             calls.append(failures[len(calls)])
@@ -334,11 +334,83 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.client = SimpleNamespace(get_messages=get_messages)
         with patch('tgzip.engine.download', transfer), patch('tgzip.engine.asyncio.sleep', no_wait):
             await self.engine.download_queue()
-        self.assertEqual(sum(isinstance(item, ConnectionError) for item in calls), 4)
-        self.assertEqual(len(calls), 6)
+        # Five connection retries after the first failure; waits never count.
+        self.assertEqual(sum(isinstance(item, ConnectionError) for item in calls), 6)
+        self.assertEqual(len(calls), 8)
         job = self.engine.store.jobs(123, -100)[0]
         self.assertEqual(job['state'], 'error')
         self.assertEqual(job['error'], error_text(ConnectionError()))
+
+    async def test_timeout_fails_only_its_file_and_the_queue_continues(self):
+        # TimeoutError is an OSError subclass; it must never be treated as a disk error.
+        self.queue_files(3)
+        attempts = []
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
+            attempts.append(job['message'])
+            if job['message'] == 2:
+                raise TimeoutError()
+            progress(job['size'], 0)
+        async def no_wait(*args):
+            pass
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer), \
+             patch('tgzip.engine.asyncio.sleep', no_wait):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(self.engine.task, 2)
+        self.assertEqual(attempts.count(2), 6)
+        states = {job['message']: (job['state'], job['error']) for job in self.engine.store.jobs(123, -100)}
+        self.assertEqual(states[1][0], 'done')
+        self.assertEqual(states[3][0], 'done')
+        self.assertEqual(states[2], ('error', error_text(TimeoutError())))
+        self.assertIn('did not respond in time', states[2][1])
+        self.assertFalse([value for name, value in self.events if name == 'error'])
+
+    async def test_disk_errors_still_stop_the_queue(self):
+        self.queue_files(3)
+        self.engine.settings['parallel_downloads'] = 1
+        async def transfer(client, message, job, gate, progress, *, limiter=None):
+            raise PermissionError(13, 'Fixture access denied')
+        with patch.object(self.engine, 'checker', return_value=None), patch('tgzip.engine.download', transfer):
+            self.engine.launch('downloading', self.engine.download_queue)
+            await asyncio.wait_for(self.engine.task, 2)
+        self.assertTrue([value for name, value in self.events if name == 'error'])
+        self.assertEqual([job['state'] for job in self.engine.store.jobs(123, -100)], ['error', 'queued', 'queued'])
+
+    async def test_scan_retries_network_failures_from_its_checkpoint(self):
+        self.engine.chat = -100
+        def message(id):
+            return SimpleNamespace(id=id, document=SimpleNamespace(id=900 + id, size=100, mime_type='application/zip'),
+                                   file=SimpleNamespace(name=f'{id}.zip'))
+        calls = []
+        async def iter_messages(entity, *, min_id, reverse, filter):
+            calls.append(min_id)
+            for item in (message(1), message(2), message(3)):
+                if item.id > min_id:
+                    yield item
+                    if len(calls) <= 2 and item.id == len(calls):
+                        raise (TimeoutError() if len(calls) == 1 else ConnectionError())
+        slept = []
+        async def no_wait(seconds, *args):
+            slept.append(seconds)
+        self.engine.client = SimpleNamespace(iter_messages=iter_messages)
+        with patch('tgzip.engine.asyncio.sleep', no_wait):
+            await self.engine.scan()
+        self.assertEqual(calls, [0, 1, 2])
+        # Progress between failures resets the backoff.
+        self.assertEqual([s for s in slept if s >= 5], [5, 5])
+        self.assertEqual([job['message'] for job in self.engine.store.jobs(123, -100)], [1, 2, 3])
+
+    async def test_scan_gives_up_after_repeated_network_failures_keeping_checkpoint(self):
+        self.engine.chat = -100
+        async def iter_messages(entity, **kwargs):
+            raise TimeoutError()
+            yield
+        async def no_wait(*args):
+            pass
+        self.engine.client = SimpleNamespace(iter_messages=iter_messages)
+        with patch('tgzip.engine.asyncio.sleep', no_wait):
+            with self.assertRaises(TimeoutError):
+                await self.engine.scan()
+        self.assertEqual(sum(1 for name, value in self.events if name == 'log' and 'network problem' in value), 5)
 
     def queue_files(self, count, size=100):
         self.engine.chat = -100
@@ -890,6 +962,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('private-token', error_text(RuntimeError('private-token')))
         self.assertEqual(error_text(errors.FloodPremiumWaitError(request=None, capture=5)),
                          'Telegram requires a 5-second wait. Try again later.')
+        self.assertNotIn('disk space', error_text(TimeoutError()))
+        self.assertIn('disk space', error_text(PermissionError(13, 'denied')))
 
 
 if __name__ == '__main__':

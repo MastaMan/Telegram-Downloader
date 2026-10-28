@@ -43,7 +43,7 @@ Intermediate download progress is batched into one database transaction about on
 - Original filenames are preserved, including extension case and long names. Only collisions add a removable prefix such as `__dup_2__`; Windows-invalid characters still need replacement.
 - Completed archives saved with old numbered names are restored automatically for the selected chat, including files in `wrong_archives`, using verified Telegram metadata and a recoverable rename journal.
 - Automatic background checks with installed WinRAR after each download, while other files download, plus **Check archives** for previously downloaded files. WinRAR's test decompresses every file and compares its CRC, so the queue shows **Intact**, **Damaged**, or **Password**. Three confirmed failures move a damaged archive to `wrong_archives\damaged` and a password-protected one to `wrong_archives\password`, without overwriting existing files.
-- Pause, resume, stop, network retries, rate-limit waits, and resumable `.part` files.
+- Pause, resume, stop, network retries (a timeout fails only that file, never the whole queue), rate-limit waits, and resumable `.part` files.
 - **Finish current** completes active downloads and pending archive checks, then stops without starting another archive. **Start** continues the remaining queue.
 - Durable SQLite queue and incremental history-scan checkpoints, isolated by Telegram account and chat. The queue database can live in another local or synced folder (such as Dropbox), and **Backup** saves checked ZIP snapshots next to it. A verified automatic backup is also made in the background once per day when the app opens (`backups\auto`, newest 60 kept).
 - QR sign-in with automatic code refresh and optional two-step verification password.

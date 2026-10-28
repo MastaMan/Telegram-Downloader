@@ -25,6 +25,15 @@ from updater import UpdateError, UpdateCancelled, prepare_update, load_plan
 # Server-requested waits, including FLOOD_PREMIUM_WAIT download throttling of
 # non-Premium accounts. They are instructions to pause, not transfer failures.
 FLOOD_WAITS = (errors.FloodWaitError, errors.FloodPremiumWaitError)
+# Transient network failures. asyncio.TimeoutError is the built-in TimeoutError,
+# which is an OSError subclass: never treat it as a disk error.
+NETWORK_ERRORS = (ConnectionError, asyncio.TimeoutError, errors.ServerError)
+FILE_RETRIES = 5
+
+
+def network_delay(failures):
+    """5, 10, 20, 40, then 60 seconds between attempts after a network failure."""
+    return min(60, 5 * 2 ** (failures - 1))
 
 
 def error_text(exc):
@@ -39,6 +48,8 @@ def error_text(exc):
         return 'Telegram rejected the API ID / API Hash. Check your credentials.'
     if isinstance(exc, FLOOD_WAITS):
         return f'Telegram requires a {exc.seconds}-second wait. Try again later.'
+    if isinstance(exc, asyncio.TimeoutError):
+        return 'Telegram did not respond in time (network timeout). Partial files are kept; Start retries.'
     if isinstance(exc, (OSError, ConnectionError, asyncio.TimeoutError)):
         return f'Network or local file operation failed ({type(exc).__name__}, code {getattr(exc, "errno", "n/a")}). Check connection, disk space and folder permissions.'
     return f'Operation failed ({type(exc).__name__}). Check your access and settings, then retry.'
@@ -593,6 +604,7 @@ class Engine:
             self.emit('rename_progress', {'done': 0, 'total': len(candidates)})
             for offset in range(0, len(candidates), 100):
                 batch = candidates[offset:offset + 100]
+                failures = 0
                 while True:
                     await self.gate.wait()
                     try:
@@ -602,6 +614,14 @@ class Engine:
                     except FLOOD_WAITS as exc:
                         self.emit('log', f'Filename restoration: Telegram requested a {exc.seconds}-second wait.')
                         await asyncio.sleep(max(exc.seconds, 1))
+                    except NETWORK_ERRORS as exc:
+                        failures += 1
+                        if failures > FILE_RETRIES:
+                            raise
+                        delay = network_delay(failures)
+                        self.emit('log', f'Filename restoration: network problem ({type(exc).__name__}); '
+                                         f'retry {failures}/{FILE_RETRIES} in {delay} seconds.')
+                        await asyncio.sleep(delay)
                 messages = {message.id: message for message in messages if message is not None}
                 for index, (job, source, identity) in enumerate(batch, 1):
                     await self.gate.wait()
@@ -820,7 +840,7 @@ class Engine:
         filenames = self.store.filename_allocator()
         if not cursor:
             self.emit('log', 'Scanning full history for ZIP and RAR archives. Existing queue entries are preserved.')
-        count, last = 0, 0
+        count, last, failures = 0, 0, 0
         while True:
             try:
                 # Telegram's document filter skips text, photo and video messages server-side.
@@ -837,6 +857,7 @@ class Engine:
                     self.store.scanned(account, chat, message.id, item)
                     cursor = max(cursor, message.id)
                     count += 1
+                    failures = 0
                     now = time.monotonic()
                     if now - last > .5:
                         self.emit('scan', count)
@@ -847,6 +868,15 @@ class Engine:
                 # Resume from the saved checkpoint after the requested wait.
                 self.emit('log', f'Scan: Telegram requested a {exc.seconds}-second wait. Scanning continues automatically.')
                 await asyncio.sleep(max(exc.seconds, 1))
+            except NETWORK_ERRORS as exc:
+                # Consecutive failures without progress eventually stop the scan; the checkpoint stays.
+                failures += 1
+                if failures > FILE_RETRIES:
+                    raise
+                delay = network_delay(failures)
+                self.emit('log', f'Scan: network problem ({type(exc).__name__}); retry {failures}/{FILE_RETRIES} '
+                                 f'in {delay} seconds from the saved position.')
+                await asyncio.sleep(delay)
         self.emit('log', f'Scan complete: checked {count:,} files. ZIP and RAR queue saved.')
         self.apply_rules(account, chat)
         self.snapshot()
@@ -1073,11 +1103,11 @@ class Engine:
                     self.emit('log', f'Telegram {kind}: waiting {exc.seconds} seconds. Stop remains available.')
                     progress(self.transfers[after]['done'], 0)
                     await asyncio.sleep(max(exc.seconds, 1))
-                except (ConnectionError, asyncio.TimeoutError, errors.FileReferenceExpiredError, errors.ServerError) as exc:
-                    if retries == 3:
+                except (*NETWORK_ERRORS, errors.FileReferenceExpiredError) as exc:
+                    if retries == FILE_RETRIES:
                         raise
                     retries += 1
-                    self.emit('log', f'Connection retry {retries}/3 ({type(exc).__name__}). Partial file saved.')
+                    self.emit('log', f'Connection retry {retries}/{FILE_RETRIES} ({type(exc).__name__}). Partial file saved.')
                     progress(self.transfers[after]['done'], 0)
                     await asyncio.sleep(2 ** retries)
             self.store.update(account, chat, after, done=job['size'], state='done', error='',
@@ -1096,7 +1126,8 @@ class Engine:
             self.store.update(account, chat, after, state='error', error=reason)
             self.emit('log', f'File #{after}: {reason}')
             # Disk errors should not cause the rest of the queue to fail in a loop.
-            if isinstance(exc, OSError) and not isinstance(exc, ConnectionError):
+            # A network timeout only fails this file; the pool keeps going.
+            if isinstance(exc, OSError) and not isinstance(exc, NETWORK_ERRORS):
                 raise
         finally:
             self.transfers.pop(after, None)
